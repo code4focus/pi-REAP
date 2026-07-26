@@ -68,6 +68,8 @@ Resolve the PR-scoped lease before spawning:
 4. Spawn only when the PR has no lease holder, escalation requires another model/effort rung, the leased agent is unusable, or a new PR begins.
 5. When escalation replaces the executor, transfer the PR execution lease to the higher-rung agent and reuse that agent for the remainder of the PR.
 
+A reused `fork_turns: "none"` publication agent is unusable for an external mutation if the authorization layer rejects the action because the agent did not directly inherit the user's explicit approval. In that case only, preserve its review evidence and replace the publication lease at the same rung with the smallest positive bounded turn fork that includes the approval. Record the replacement as an authorization-visibility boundary, not as capability escalation.
+
 Use explicit settings:
 
 - execution: `gpt-5.6-terra`, `medium`, worker role;
@@ -75,6 +77,8 @@ Use explicit settings:
 - escalation: replace the failed attempt at the next unused rung: `gpt-5.6-terra/high`, `gpt-5.6-sol/high`, then `gpt-5.6-sol/xhigh`.
 
 Use `fork_turns: "none"` or a positive bounded turn count and a complete dispatch envelope rather than relying on inherited conversation. Never use a full-history fork when setting an explicit model or effort. Include the goal, plan slice, resolved packet path/hash, task, owned paths, read-only areas, prerequisites, explicit non-scope, acceptance checks, permitted mutations, relevant evidence, and required return format. Tell every worker that the worktree is shared and child spawning is forbidden.
+
+Do not rely on a root-relayed approval for external mutations. Use the minimum positive bounded turn fork needed to give the publication worker the direct user authorization while excluding older unrelated context.
 
 Use `$implement-pi-reap-pr` in execution envelopes and `$review-pi-reap-pr` in assurance envelopes.
 

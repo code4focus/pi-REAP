@@ -74,8 +74,9 @@ Within the same PR:
 2. Reuse the existing assurance agent for independent review rounds and authorized publication work.
 3. Do not call `spawn_agent` for a new bounded task when a usable lease holder exists at the required rung.
 4. If a leased agent is running, queue a related follow-up or send a clarification instead of opening a duplicate.
-5. Replace a lease holder only for capability escalation, unrecoverable agent failure, or explicit user direction.
-6. When escalation creates a higher-rung executor, transfer the execution lease to it and reuse it for the rest of that PR. Do not spawn a lower-rung replacement merely to downshift.
+5. Replace a lease holder only for capability escalation, unrecoverable agent failure, an external-authorization visibility boundary, or explicit user direction.
+6. An external-authorization visibility boundary exists only when a reused `fork_turns: "none"` publication agent is rejected because it did not directly inherit the user's explicit approval. Mark that agent unusable for publication, retain its accepted review evidence, and replace only the publication lease at the same model/effort with the smallest bounded turn fork that includes the approval. This is neither a capability escalation nor permission to load full history.
+7. When escalation creates a higher-rung executor, transfer the execution lease to it and reuse it for the rest of that PR. Do not spawn a lower-rung replacement merely to downshift.
 
 This reuse preserves the worker's task context and increases the chance that stable prompt prefixes remain cacheable.
 
@@ -155,6 +156,8 @@ terminal escalation:
 ```
 
 Use `fork_turns: "none"` or a positive bounded turn count, both of which permit explicit model and effort selection. Never use a full-history fork with an explicit override. Prefer a self-contained task envelope over inheriting the root's full reasoning history.
+
+For an external mutation, a relayed approval is not a substitute for direct user authorization. When authorization is required, use the minimum positive bounded turn fork that includes the latest explicit approval. If an existing `fork_turns: "none"` publication lease is rejected solely for missing directly inherited authorization, apply the same-rung lease-replacement rule in section 5.
 
 ## 8. Required dispatch envelope
 
