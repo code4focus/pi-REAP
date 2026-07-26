@@ -60,9 +60,11 @@ last_updated: 2026-07-26
 ## Current repository and publication state
 
 - Branch: `main`.
-- Commit history: no commits yet.
+- Local commit: `d64af23bcca06be6308892818062d28fba097200` (`Bootstrap Pi REAP governance baseline`), containing only `AGENTS.md`, `.agents/**`, `.github/**`, and `docs/**`.
 - Remote: `origin` points to `git@github.com:code4focus/pi-REAP.git`.
 - Remote heads: none at the latest read-only check; publication therefore requires a harness/plan-only `main` bootstrap before the PR 1 product commit.
+- GitHub identity check: `code4focus/pi-REAP`, public, empty default branch, current viewer permission `ADMIN`.
+- Publication attempt: the first `git push origin main` was stopped before execution by the external authorization reviewer while the remote identity was still unverified; no remote mutation occurred. Read-only identity and permission verification is now complete, so publication may be retried.
 - Product implementation: PR 1 is present in the working tree and accepted locally; no product commit has been published.
 - Commit, push, and PR mutations remain subject to the active authorization and repository checks in `AGENTS.md`.
 
@@ -107,3 +109,5 @@ None. The earlier PR 1 no-write-evidence finding was corrected and independently
 - Launched goal `019f9fe3-ab80-7511-ab2c-9134485aa077`.
 - Completed PR 1 implementation and independent readiness review; all local gates pass and no findings remain.
 - Confirmed that the remote has no heads, requiring a plan/harness-only `main` bootstrap before publishing the PR 1 product slice.
+- Created the local plan/harness-only bootstrap commit `d64af23bcca06be6308892818062d28fba097200`; its initial push was stopped before execution pending remote verification.
+- Verified through GitHub that the publication target is the public `code4focus/pi-REAP` repository, has no default branch yet, and grants the current viewer `ADMIN` permission.
