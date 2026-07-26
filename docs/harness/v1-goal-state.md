@@ -26,6 +26,7 @@ last_updated: 2026-07-26
 8. Permit the root to update repository harness files during the goal when the change demonstrably improves execution or token/context efficiency without changing product semantics or weakening acceptance.
 9. Record acceptance-relevant user declarations, goal state, harness changes, PR evidence, lease changes, escalations, and blockers in project documentation.
 10. Keep the goal active until every v1 terminal criterion has live evidence, all slices pass independent review, requested publication is verified, no blocking record remains, and worker leases are drained.
+11. The user explicitly authorizes pushing the local bootstrap commits to the public `code4focus/pi-REAP` repository at `origin/main`, then pushing the PR 1 branch, creating its PR, and continuing through the remaining v1 PR slices.
 
 ## Context-loading contract
 
@@ -63,10 +64,12 @@ last_updated: 2026-07-26
 - Local commits:
   - `d64af23bcca06be6308892818062d28fba097200` (`Bootstrap Pi REAP governance baseline`), containing only `AGENTS.md`, `.agents/**`, `.github/**`, and `docs/**`.
   - `468a76c99d6993036d2e9563d7009a52701f39c1` (`Record publication target verification`), containing only this execution record.
+  - `6d37089cc0382efa197a7f11dc92871411c3fe59` (`Record PR 1 publication blocker`), containing only this execution record.
 - Remote: `origin` points to `git@github.com:code4focus/pi-REAP.git`.
 - Remote heads: none at the latest read-only check; publication therefore requires a harness/plan-only `main` bootstrap before the PR 1 product commit.
 - GitHub identity check: `code4focus/pi-REAP`, public, empty default branch, current viewer permission `ADMIN`.
 - Publication attempts: both `git push origin main` attempts were stopped before remote execution by the external authorization reviewer. The first required remote verification. After verification, the second required a fresh explicit user instruction authorizing a push specifically to the public `code4focus/pi-REAP` repository at `origin/main`.
+- Publication authorization: granted explicitly by the user for `code4focus/pi-REAP` at `origin/main`; publication may resume from the current local commits.
 - Product implementation: PR 1 is present in the working tree and accepted locally; no product commit has been published.
 - Commit, push, and PR mutations remain subject to the active authorization and repository checks in `AGENTS.md`.
 
@@ -91,8 +94,7 @@ last_updated: 2026-07-26
 
 ## Open blockers
 
-- External publication authorization: PR 1 cannot be published, and PR 2 must not begin, until the user explicitly authorizes pushing the two local bootstrap commits to the public `code4focus/pi-REAP` repository at `origin/main`. This is an authority/external-state condition, not a model-capability failure, so model escalation does not apply.
-- The initial sandbox DNS condition was resolved through the approved network path and did not require model escalation.
+None. The publication-authorization condition was resolved by an explicit user instruction. The initial sandbox DNS condition was resolved through the approved network path and did not require model escalation.
 
 ## Open review findings
 
@@ -116,3 +118,5 @@ None. The earlier PR 1 no-write-evidence finding was corrected and independently
 - Verified through GitHub that the publication target is the public `code4focus/pi-REAP` repository, has no default branch yet, and grants the current viewer `ADMIN` permission.
 - Created the local documentation commit `468a76c99d6993036d2e9563d7009a52701f39c1` containing the verification record.
 - Stopped a second push before remote execution because the authorization layer requires a fresh explicit user instruction naming `code4focus/pi-REAP` and `origin/main`; no remote state changed.
+- Created the local documentation-only commit `6d37089cc0382efa197a7f11dc92871411c3fe59` to preserve the exact PR 1 publication blocker and unblock condition.
+- Received explicit user authorization to push the local bootstrap commits to the public `code4focus/pi-REAP` repository at `origin/main`, then push and create PR 1 and continue the remaining v1 PR slices.
