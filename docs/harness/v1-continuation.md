@@ -31,7 +31,8 @@ Do not load the full plan, dispatch policy, blocker ledger, PR 1 implementation 
 - Remote `main`: contains this handoff; resolve its live SHA with the resume script. The first handoff publication commit is `9b3ef0c7d84926ad35b2efd8c3273d656cc084a4`.
 - PR 1 base commit: `02fba8f70ff09464187d291e2361d8f7b7359913`.
 - PR 1 branch/head: `pr-01-repository-skeleton` at `9b14c5ab3029fc3321df381e73978786f3abba68`.
-- PR 1: <https://github.com/code4focus/pi-REAP/pull/1>, open, non-draft, mergeable.
+- PR 1: <https://github.com/code4focus/pi-REAP/pull/1>, open and non-draft.
+- Mergeability: local read-only simulation is conflict-free. GitHub may report `mergeable: null` and `mergeable_state: unknown` immediately after a `main` metadata push; reconcile live instead of interpreting a connector-normalized `false` as a conflict.
 - PR 1 diff: 17 files, 1,579 additions, base `main`.
 - Remote checks/reviews: no configured status checks and no review threads at handoff time.
 - Local acceptance: `pnpm build`, `pnpm lint`, `pnpm typecheck`, `pnpm test` (2 files, 3 tests), `git diff --check`, and independent Terra/high review all passed.
