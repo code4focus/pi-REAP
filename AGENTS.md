@@ -50,6 +50,10 @@ Pass packet paths and hashes by reference. Do not paste large harness documents 
 
 Maintain `docs/harness/v1-goal-state.md` as the durable current execution record. Update it after a controlling user declaration, goal-state change, PR transition, worker-lease replacement, escalation, blocker decision, acceptance result, or material harness optimization. Routine execution workers must not preload it; PR-readiness and final-acceptance reviewers must read its latest current-declarations and relevant PR evidence.
 
+Actively control context size throughout the goal. Compact auto-loaded harness and current-state files when they approach the repository budgets, move completed-PR evidence and historical events to on-demand files, and remove stale routing text. Compaction must preserve current authority, acceptance evidence, hashes, and links; it may not silently weaken policy or product semantics. Run `.agents/skills/orchestrate-pi-reap-goal/scripts/check_context_budget.sh` after material harness changes and at every PR boundary.
+
+For a cross-machine handoff, treat `docs/harness/v1-continuation.md` as the compact resume index and run `.agents/skills/orchestrate-pi-reap-goal/scripts/resume_v1_goal.sh`. Reconcile its pinned facts with live Git/GitHub state before resuming. Do not use the handoff as product authority or preload unrelated packets.
+
 ## Goal-driven sub-agent execution
 
 For goal-driven execution, invoke `$orchestrate-pi-reap-goal` and follow `docs/harness/subagent-dispatch-policy.md`.
