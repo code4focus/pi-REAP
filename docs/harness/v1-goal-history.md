@@ -22,3 +22,4 @@ This is an on-demand chronological archive. Do not preload it for routine execut
 - Paused product execution for cross-machine offload, released PR 1 leases, and left PR 2 unloaded.
 - Added a compact continuation record, one-command resume path, and mechanical context budgets.
 - Authorized ongoing compaction and splitting of auto-loaded harness while preserving current authority and traceable evidence.
+- Published and validated the cross-machine handoff at `9b3ef0c7d84926ad35b2efd8c3273d656cc084a4`; later metadata-only handoff commits are intentionally discovered from live `origin/main` rather than self-pinning.

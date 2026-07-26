@@ -65,9 +65,10 @@ last_updated: 2026-07-26
 
 ## Current repository and publication state
 
-- Local branch at pause: `pr-01-repository-skeleton`, clean and tracking its pushed remote branch.
+- Local branch at pause: `main`, clean and tracking `origin/main`.
 - Remote: `origin` points to `git@github.com:code4focus/pi-REAP.git`.
-- Remote `main`: `02fba8f70ff09464187d291e2361d8f7b7359913` (`Route publication authorization safely`).
+- Remote `main`: contains the published cross-machine handoff. Resolve its live SHA with `resume_v1_goal.sh`; the first handoff publication commit is `9b3ef0c7d84926ad35b2efd8c3273d656cc084a4`.
+- PR 1 base commit: `02fba8f70ff09464187d291e2361d8f7b7359913` (`Route publication authorization safely`).
 - Remote PR 1 head: `9b14c5ab3029fc3321df381e73978786f3abba68` on `pr-01-repository-skeleton`.
 - Pull request: [#1, Repository skeleton and contract tests](https://github.com/code4focus/pi-REAP/pull/1), open, non-draft, mergeable, base `main`, 17 files, 1,579 additions.
 - Remote checks and reviews at pause: no configured status checks and no review threads.
@@ -97,6 +98,7 @@ last_updated: 2026-07-26
 - PR 1 contract evidence proves only the two explicit config files are read and no file-system write occurs.
 - Independent PR 1 readiness re-review found no remaining findings and accepted the slice for publication.
 - PR 1 publication metadata was independently read back from GitHub: open non-draft PR #1, base `02fba8f`, head `9b14c5a`, mergeable, no status checks, and no review threads.
+- The published resume script passed its clean-worktree, context-budget, frozen-plan-hash, repository-identity, fetch, `origin/main`, and PR 1 head checks.
 
 ## Open blockers
 
