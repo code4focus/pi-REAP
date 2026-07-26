@@ -1,0 +1,11 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "..",
+    "outDir": "../dist/eval",
+    "declaration": true,
+    "sourceMap": true,
+    "types": ["node"]
+  },
+  "include": ["corpus/**/*.ts", "runner/**/*.ts", "graders/**/*.ts", "reports/**/*.ts"]
+}

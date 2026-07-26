@@ -5,9 +5,12 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "lint": "oxlint src test",
+    "lint": "oxlint src test eval",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "eval:build": "tsc -p eval/tsconfig.json",
+    "eval:typecheck": "tsc -p eval/tsconfig.json --noEmit",
+    "eval:sample": "vitest run eval/test/sample-report.test.ts"
   },
   "dependencies": {
     "@sinclair/typebox": "^0.34.41"
