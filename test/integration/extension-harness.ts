@@ -1,27 +1,27 @@
-export interface SyntheticModel { id: string; provider: string }
+import type { PiExtensionHost, PiLifecycleEvents } from "../../src/index.js";
+
+export interface SyntheticModel { id: string; provider: string; api?: unknown; reasoning?: unknown; thinkingLevelMap?: unknown }
 export interface SyntheticAssistantUsage { inputTokens: number; outputTokens: number }
 export interface SyntheticContext { model: SyntheticModel; assistantUsage?: SyntheticAssistantUsage }
 export interface SyntheticToolError { toolName: string; message: string }
 export interface SyntheticSession { id: string }
 
-export interface LifecycleEvents {
-  before_agent_start: { ctx: SyntheticContext };
+export interface LifecycleEvents extends PiLifecycleEvents {
   assistant_usage: { ctx: SyntheticContext; usage: SyntheticAssistantUsage };
   tool_error: { ctx: SyntheticContext; error: SyntheticToolError };
   session_replaced: { previous: SyntheticSession; next: SyntheticSession };
   compaction_retry: { ctx: SyntheticContext; attempt: number };
-  agent_settled: { ctx: SyntheticContext };
   message_queued: { ctx: SyntheticContext; messageId: string };
 }
 
 export type LifecycleHandler<E extends keyof LifecycleEvents> =
   (event: LifecycleEvents[E]) => void | Partial<LifecycleEvents[E]>;
 
-export class ExtensionHarness {
+export class ExtensionHarness implements PiExtensionHost {
   readonly registerToolCalls: unknown[] = [];
   readonly setThinkingLevelCalls: string[] = [];
   private readonly handlers: { [E in keyof LifecycleEvents]: LifecycleHandler<E>[] } = {
-    before_agent_start: [], assistant_usage: [], tool_error: [], session_replaced: [], compaction_retry: [], agent_settled: [], message_queued: [],
+    session_start: [], input: [], before_agent_start: [], assistant_usage: [], tool_error: [], session_replaced: [], compaction_retry: [], agent_settled: [], message_queued: [], before_provider_request: [], tool_call: [], tool_execution_end: [], message_end: [], session_compact: [],
   };
 
   registerTool(definition: unknown): void { this.registerToolCalls.push(definition); }
