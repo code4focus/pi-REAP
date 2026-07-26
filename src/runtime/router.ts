@@ -25,6 +25,7 @@ export class EpochRouter {
   private counter = 0;
   private lastDecision?: RoutingDecision;
   private queuedInput?: StartInput;
+  private lastPromptChars = 0;
 
   constructor(options: RouterOptions = {}) {
     this.now = options.now ?? Date.now;
@@ -34,6 +35,7 @@ export class EpochRouter {
   }
 
   start(input: StartInput): RoutingDecision {
+    this.lastPromptChars = input.prompt.length;
     const features = extractFeatures(input);
     const current = this.runtime.currentEpoch;
     const previous = current ?? this.runtime.previousEpoch;
@@ -64,6 +66,7 @@ export class EpochRouter {
   /** Holds one unmodified input only until before_agent_start consumes it. */
   queueInput(input: StartInput): void { this.queuedInput = input; }
   startQueued(): RoutingDecision | undefined { const input = this.queuedInput; delete this.queuedInput; return input ? this.start(input) : undefined; }
+  latestPromptChars(): number { return this.lastPromptChars; }
   /** Session lifecycle input; this is in-memory and never enters model history. */
   setResumeReason(reason: string | undefined): void { this.runtime.resumeGuard = ["resume", "fork", "reload", "startup"].includes(reason ?? ""); }
 

@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { extension } from "../../src/index.js";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createExtension, type PiExtensionHost } from "../../src/index.js";
 import { withoutReasoningEffort } from "../../src/provider/patch.js";
 import { ExtensionHarness, type SyntheticContext } from "./extension-harness.js";
 
 const ctx: SyntheticContext = { model: { id: "synthetic", provider: "openai", api: "openai-responses", reasoning: true } };
+const extension = (pi: PiExtensionHost) => createExtension({ telemetryDirectory: mkdtempSync(join(tmpdir(), "pi-reap-lifecycle-")) })(pi);
 
 describe("typed lifecycle adapter", () => {
   it.each(["continue", "fix it"])("routes a %s after session resume to xhigh and patches request-locally", (text) => {

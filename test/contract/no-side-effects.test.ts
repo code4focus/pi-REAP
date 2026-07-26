@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { extension } from "../../src/index.js";
+import { createExtension } from "../../src/index.js";
 import { defaultConfigPaths, loadConfig } from "../../src/config/load.js";
 import { ExtensionHarness } from "../integration/extension-harness.js";
 
@@ -11,7 +11,7 @@ class StatefulFakeFileSystem {
 describe("PR 1 extension boundary", () => {
   it("does not register an LLM tool or set Pi thinking level", () => {
     const pi = new ExtensionHarness();
-    const beforeAgentStartResult = extension(pi);
+    const beforeAgentStartResult = createExtension({ telemetryDirectory: "/tmp/pi-reap-contract-telemetry" })(pi);
     expect(pi.registerToolCalls).toEqual([]);
     expect(pi.setThinkingLevelCalls).toEqual([]);
     expect(beforeAgentStartResult).toBeUndefined();
