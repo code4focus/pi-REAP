@@ -1,0 +1,4 @@
+interface:
+  display_name: "Orchestrate the Pi REAP Goal"
+  short_description: "Route PR-scoped context to two workers"
+  default_prompt: "Use $orchestrate-pi-reap-goal to resolve one PR scope packet, reuse its workers, and isolate unrelated context."

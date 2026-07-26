@@ -1,0 +1,4 @@
+interface:
+  display_name: "Implement a Planned Pi REAP PR"
+  short_description: "Implement one hash-validated Pi REAP scope"
+  default_prompt: "Use $implement-pi-reap-pr to implement the currently resolved Pi REAP PR scope packet."

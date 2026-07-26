@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review a Pi REAP PR"
+  short_description: "Review one hash-validated Pi REAP scope"
+  default_prompt: "Use $review-pi-reap-pr to review the currently resolved Pi REAP PR scope packet."
