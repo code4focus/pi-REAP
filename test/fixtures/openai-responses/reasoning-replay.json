@@ -1,0 +1,8 @@
+{
+  "fixture_provenance": "synthetic sanitized fixture; not a captured real Pi request",
+  "model": "gpt-5.6",
+  "input": [{ "type": "reasoning", "id": "rs_synthetic", "encrypted_content": "encrypted-synthetic-item" }],
+  "prompt_cache_key": "synthetic-responses-replay",
+  "prompt_cache_retention": "24h",
+  "reasoning": { "effort": "high", "summary": "none", "context": "encrypted-synthetic-context" }
+}
