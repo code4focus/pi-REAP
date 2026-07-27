@@ -19,5 +19,10 @@ describe("typed live cache observability protocol", () => {
     expect(classifyLiveCacheComparison([{ positiveControl: raw(10), crossover: raw(0) }])).toBe("REGRESSION");
     expect(classifyLiveCacheComparison([{ positiveControl: raw(0), crossover: raw(0) }])).toBe("ENVIRONMENT_UNQUALIFIED");
     expect(classifyLiveCacheComparison([{ positiveControl: recordPiNormalizedCacheRead(0), crossover: recordPiNormalizedCacheRead(0) }])).toBe("OBSERVABILITY_UNAVAILABLE");
+    expect(classifyLiveCacheComparison([
+      { positiveControl: raw(10), crossover: raw(8) },
+      { positiveControl: raw(0), crossover: raw(0) },
+    ])).toBe("ENVIRONMENT_UNQUALIFIED");
+    expect(() => classifyLiveCacheComparison([])).toThrow("requires a positive-control/crossover pair");
   });
 });

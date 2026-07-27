@@ -5,13 +5,19 @@ export interface TokenPricing { readonly uncachedInputMicrosPerToken: number; re
 export const syntheticTokenPricing: TokenPricing = { uncachedInputMicrosPerToken: 10, outputMicrosPerToken: 30, reasoningMicrosPerToken: 20, cacheReadMicrosPerToken: 2, cacheWriteMicrosPerToken: 12 };
 
 export function effectiveCostMicros(usage: UsageMetrics, pricing: TokenPricing): number {
-  return usage.uncachedInputTokens * pricing.uncachedInputMicrosPerToken
-    + usage.outputTokens * pricing.outputMicrosPerToken
-    + usage.reasoningTokens * pricing.reasoningMicrosPerToken
-    + usage.cacheReadTokens * pricing.cacheReadMicrosPerToken
-    + usage.cacheWriteTokens * pricing.cacheWriteMicrosPerToken;
+  return (usage.uncachedInputTokens ?? 0) * pricing.uncachedInputMicrosPerToken
+    + (usage.outputTokens ?? 0) * pricing.outputMicrosPerToken
+    + (usage.reasoningTokens ?? 0) * pricing.reasoningMicrosPerToken
+    + (usage.cacheReadTokens ?? 0) * pricing.cacheReadMicrosPerToken
+    + (usage.cacheWriteTokens ?? 0) * pricing.cacheWriteMicrosPerToken;
+}
+
+/** Raw run evidence is costable only when all independently priced fields are present. */
+export function observedEffectiveCostMicros(usage: UsageMetrics, pricing: TokenPricing): number | undefined {
+  if (usage.uncachedInputTokens === undefined || usage.outputTokens === undefined || usage.reasoningTokens === undefined || usage.cacheReadTokens === undefined || usage.cacheWriteTokens === undefined) return undefined;
+  return effectiveCostMicros(usage, pricing);
 }
 
 export function generationCostMicros(usage: UsageMetrics, pricing: TokenPricing): number {
-  return usage.outputTokens * pricing.outputMicrosPerToken + usage.reasoningTokens * pricing.reasoningMicrosPerToken;
+  return (usage.outputTokens ?? 0) * pricing.outputMicrosPerToken + (usage.reasoningTokens ?? 0) * pricing.reasoningMicrosPerToken;
 }

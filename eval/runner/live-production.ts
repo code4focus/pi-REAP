@@ -10,10 +10,9 @@ import {
 } from "./live-driver.js";
 import { recordPiAssistantUsage } from "./live-observability.js";
 import type { AutomaticEffort } from "../../src/domain/effort.js";
-import type { EffortRouterConfig } from "../../src/config/schema.js";
 import type { ExtensionOptions } from "../../src/index.js";
 import { effectiveCostMicros } from "./cost.js";
-import type { UsageMetrics } from "./types.js";
+import type { MeasuredUsage } from "./types.js";
 import { currentImplementationBinding } from "./live-acceptance-pins.js";
 import { extensionBuildFingerprint, sourceManifestFingerprint } from "./source-fingerprints.js";
 
@@ -46,10 +45,10 @@ export interface PrivateRoot {
 
 export interface PiTerminalAssistantUsage { readonly input: number; readonly output: number; readonly cacheRead: number; readonly cacheWrite: number; readonly reasoning?: number }
 /** The exact production terminal-usage boundary; raw field presence is unavailable after Pi normalization. */
-export function liveUsageFromPiAssistantUsage(assistantUsage: PiTerminalAssistantUsage): { readonly usage: UsageMetrics; readonly cacheUsageProvenance: CacheUsageProvenance } {
+export function liveUsageFromPiAssistantUsage(assistantUsage: PiTerminalAssistantUsage): { readonly usage: MeasuredUsage; readonly cacheUsageProvenance: CacheUsageProvenance } {
   const cache = recordPiAssistantUsage(assistantUsage);
   if (cache.rawCachedTokens.status !== "unavailable_at_pi_normalized_boundary") throw new Error("Pi terminal usage must not claim raw cache-field presence");
-  const usage: UsageMetrics = {
+  const usage: MeasuredUsage = {
     uncachedInputTokens: assistantUsage.input, cacheReadTokens: cache.liveEvalCacheReadTokens, cacheWriteTokens: assistantUsage.cacheWrite,
     inputTokens: assistantUsage.input + cache.liveEvalCacheReadTokens,
     outputTokens: assistantUsage.output, reasoningTokens: assistantUsage.reasoning ?? 0,
@@ -74,11 +73,14 @@ export function validateProductionBuild(repositoryRoot: string): { readonly sour
 export function loadInstalledPi(): InstalledPi {
   const executablePath = resolveInstalledExecutable();
   const resolvedExecutable = realpathSync(executablePath);
-  const packageRoot = dirname(dirname(resolvedExecutable));
+  // pnpm's `.bin/pi` is a shell wrapper, not the package's `dist/cli.js`.
+  const packageRoot = resolvedExecutable.endsWith("/node_modules/.bin/pi")
+    ? realpathSync(join(dirname(resolvedExecutable), "..", "@earendil-works", "pi-coding-agent"))
+    : dirname(dirname(resolvedExecutable));
   const packageJsonPath = join(packageRoot, "package.json");
-  const catalogPath = join(packageRoot, "node_modules", "@earendil-works", "pi-ai", "dist", "providers", "data", "openai-codex.json");
+  const catalogPath = join(dirname(packageRoot), "pi-ai", "dist", "providers", "data", "openai-codex.json");
   const packageBytes = readFileSync(packageJsonPath); const pkg = JSON.parse(packageBytes.toString("utf8")) as Record<string, unknown>;
-  if (pkg.name !== piPackageName || pkg.version !== piVersion || realpathSync(join(packageRoot, "dist", "cli.js")) !== resolvedExecutable) throw new Error("unsupported installed Pi runtime");
+  if (pkg.name !== piPackageName || pkg.version !== piVersion) throw new Error("unsupported installed Pi runtime");
   const catalogBytes = readFileSync(catalogPath); const data = JSON.parse(catalogBytes.toString("utf8")) as Record<string, Record<string, unknown>>;
   const model = data["openai-codex-responses"]?.["gpt-5.4-mini"] as { api?: unknown; reasoning?: unknown; cost?: Record<string, unknown> } | undefined;
   if (!model) throw new Error("configured Pi model absent from installed catalog");
@@ -163,14 +165,15 @@ export function productionAdapterFactory(installed: InstalledPi, privateRoot: Pr
   return async () => new PiSdkCaptureAdapter(installed, privateRoot, repositoryRoot);
 }
 
-/** Pure, read-only v1 configuration for one bounded production capture call. */
+/**
+ * PR6 intentionally ships no approved successor artifact or public runtime
+ * injection route. Fail before the SDK/provider is constructed; PR7 owns any
+ * future internal distribution path.
+ */
 export function productionExtensionOptions(call: Pick<PlannedCall, "extensionMode" | "ordinal">, telemetryDirectory: string): ExtensionOptions {
-  const config: EffortRouterConfig = {
-    enabled: true, mode: call.extensionMode, ambiguousEffort: "high", failureEffort: "xhigh",
-    telemetry: { enabled: true, includePromptText: false, directory: telemetryDirectory },
-    ui: { showStatus: false, notifyOnEscalation: false },
-  };
-  return { telemetryDirectory, sessionId: `live-${call.ordinal}`, load: async () => config };
+  void call;
+  void telemetryDirectory;
+  throw new Error("profile-bound live qualification is unavailable");
 }
 
 /** Client-side abort guard; it never changes a provider payload. */
@@ -209,7 +212,7 @@ class PiSdkCaptureAdapter implements CaptureAdapter {
   constructor(installed: InstalledPi, privateRoot: PrivateRoot, repositoryRoot: string) {
     this.installed = installed; this.privateRoot = privateRoot; this.repositoryRoot = realpathSync(repositoryRoot);
   }
-  estimate(call: PlannedCall, task: PrivateTask): UsageMetrics {
+  estimate(call: PlannedCall, task: PrivateTask): MeasuredUsage {
     const conservativeInput = Buffer.byteLength(task.body) + Buffer.byteLength(evaluationSystemPromptForCall(call));
     return { inputTokens: conservativeInput, uncachedInputTokens: conservativeInput, outputTokens: 0, reasoningTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
   }
@@ -254,7 +257,7 @@ class PiSdkCaptureAdapter implements CaptureAdapter {
       await loader.reload({ resolveProjectTrust: async () => false });
       const sessionId = sessionIdForCall(call);
       const sessionManager = sdk.SessionManager.inMemory(this.privateRoot.path, { id: sessionId });
-      const created = await sdk.createAgentSession({ cwd: this.privateRoot.path, agentDir: join(this.privateRoot.path, "agent"), modelRuntime, model, thinkingLevel: "high", noTools: "all", tools: [], customTools: [], resourceLoader: loader, sessionManager, settingsManager: settings });
+      const created = await sdk.createAgentSession({ cwd: this.privateRoot.path, agentDir: join(this.privateRoot.path, "agent"), modelRuntime, model, noTools: "all", tools: [], customTools: [], resourceLoader: loader, sessionManager, settingsManager: settings });
       const session = created.session;
       if (session.sessionFile !== undefined || session.getActiveToolNames().length !== 0) throw new Error("isolated no-session/no-tools contract failed");
       const abortGuard = new CaptureAbortGuard(() => session.abort());
@@ -355,8 +358,9 @@ function resolveInstalledExecutable(): string {
 function readSelectedEffort(directory: string): AutomaticEffort {
   const lines = readFileSync(join(directory, "decisions.jsonl"), "utf8").trim().split("\n");
   const row = JSON.parse(lines.at(-1) ?? "{}") as Record<string, unknown>;
-  if (!["low", "medium", "high", "xhigh"].includes(String(row.recommendedEffort))) throw new Error("production extension did not emit a selected effort");
-  return row.recommendedEffort as AutomaticEffort;
+  const profile = record(row.profile); const resolved = record(profile.resolved); const providerValue = resolved.providerValue;
+  if (!["low", "medium", "high", "xhigh"].includes(String(providerValue))) throw new Error("production extension did not emit an exact profile provider value");
+  return providerValue as AutomaticEffort;
 }
 function observerFactory(register: (pi: ExtensionApi) => void): ExtensionFactory { return (pi) => register(pi); }
 function patchEffortOnly(payload: unknown, effort: AutomaticEffort): unknown {
@@ -374,7 +378,9 @@ function cloneJson(value: unknown): unknown {
 function record(value: unknown): Record<string, unknown> { if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("provider payload is not an object"); return value as Record<string, unknown>; }
 function digestFile(path: string): string { return createHash("sha256").update(readFileSync(path)).digest("hex"); }
 function installedPackageFingerprint(root: string): string {
-  return sha256(JSON.stringify(piRuntimeManifest.map((file) => ({ file, sha256: digestFile(join(root, file)) }))));
+  const pathFor = (file: string) => file.startsWith("node_modules/@earendil-works/")
+    ? join(dirname(root), file.slice("node_modules/@earendil-works/".length)) : join(root, file);
+  return sha256(JSON.stringify(piRuntimeManifest.map((file) => ({ file, sha256: digestFile(pathFor(file)) }))));
 }
 function readOwnedNoFollow(path: string, ownerUid: number, maxBytes: number): { readonly bytes: Buffer; readonly realPath: string } {
   if (typeof constants.O_NOFOLLOW !== "number") throw new Error("private no-follow reads are unavailable");

@@ -13,15 +13,11 @@ const cleanup: string[] = [];
 afterEach(() => { for (const path of cleanup.splice(0)) rmSync(path, { recursive: true, force: true }); });
 
 describe("production live-capture offline preflight and private-root safety", () => {
-  it("constructs a complete read-only v1 config for each planned extension mode", async () => {
+  it("refuses every predecessor live mode before provider setup without an exact production qualification", () => {
     const tasks = exactTaskIds.map((id) => ({ id, body: `synthetic ${id}`, grader: { kind: "exact" as const, expected: "synthetic" } }));
     const calls = planCalls(tasks); const enforce = calls.find((call) => call.kind === "route" && call.mode === "policy-enforce")!;
     const shadow = calls.find((call) => call.kind === "route" && call.mode === "policy-shadow")!; const cache = calls.find((call) => call.kind === "cache")!;
-    for (const [call, mode] of [[enforce, "enforce"], [shadow, "shadow"], [cache, "shadow"]] as const) {
-      const options = productionExtensionOptions(call, "/private/synthetic-telemetry"); const config = await options.load!();
-      expect(config).toStrictEqual({ enabled: true, mode, ambiguousEffort: "high", failureEffort: "xhigh", telemetry: { enabled: true, includePromptText: false, directory: "/private/synthetic-telemetry" }, ui: { showStatus: false, notifyOnEscalation: false } });
-      expect(options).toMatchObject({ telemetryDirectory: "/private/synthetic-telemetry", sessionId: `live-${call.ordinal}` });
-    }
+    for (const call of [enforce, shadow, cache]) expect(() => productionExtensionOptions(call, "/private/synthetic-telemetry")).toThrow("profile-bound live qualification is unavailable");
   });
 
   it("binds the installed Pi terminal parser to the exact production usage conversion boundary", async () => {

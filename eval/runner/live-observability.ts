@@ -81,7 +81,12 @@ export function classifyLiveCacheComparison(comparisons: readonly LiveCacheCompa
   if (comparisons.some(({ positiveControl, crossover }) => positiveControl.rawCachedTokens.status !== "present" || crossover.rawCachedTokens.status !== "present")) {
     return "OBSERVABILITY_UNAVAILABLE";
   }
-  const qualified = comparisons.filter(({ positiveControl }) => positiveControl.liveEvalCacheReadTokens > 0);
-  if (qualified.length === 0) return "ENVIRONMENT_UNQUALIFIED";
-  return qualified.every(({ crossover }) => crossover.liveEvalCacheReadTokens > 0) ? "PASS" : "REGRESSION";
+  // Every environment must first prove a same-effort positive control. A
+  // present zero is evidence that this environment did not demonstrate cache
+  // operation; it must not be ignored because another comparison happened to
+  // hit. Only after all controls are positive can a zero crossover be called a
+  // regression.
+  if (comparisons.some(({ positiveControl }) => positiveControl.liveEvalCacheReadTokens === 0)) return "ENVIRONMENT_UNQUALIFIED";
+  if (comparisons.some(({ crossover }) => crossover.liveEvalCacheReadTokens === 0)) return "REGRESSION";
+  return "PASS";
 }
