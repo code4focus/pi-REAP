@@ -1,42 +1,39 @@
-import type { Effort } from "../domain/effort.js";
 import type { RoutingDecision } from "../domain/routing-decision.js";
 import type { TaskEpoch } from "../domain/task-epoch.js";
-import type { ProviderModel, ProviderPatchOutcome } from "../provider/patch.js";
+import type { ProviderPatchOutcome } from "../provider/patch.js";
+import type { ProfileObservation } from "./records.js";
 import { TelemetryWriter } from "./writer.js";
 
-interface PendingRequest { epochId: string; requestIndex: number; provider: string; api: string; model: string; originalEffort?: string; appliedEffort?: string; patchStatus: "shadow" | "applied" | "unsupported" | "invalid_payload" | "mapping_failed" | "policy_failed"; correlationError?: "concurrent_pending_request"; startedAt: number; }
-export interface Usage { inputTokens?: number; outputTokens?: number; reasoningTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number }
+export interface Usage { inputTokens?: number; outputTokens?: number; reasoningTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number; cost?: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number } }
+interface Pending { epoch: TaskEpoch; profile: ProfileObservation; decisionId?: string; index: number; provider: string; api: string; model: string; outcome: ProviderPatchOutcome | { status: "shadow"; originalEffort?: string }; startedAt: number }
+export type FlushReason = "unsettled_request" | "ambiguous_response" | "session_boundary" | "profile_boundary" | "settled_boundary";
 
-/** Correlates serial lifecycle events without retaining request content. */
+/** Best-effort lifecycle correlation. Records retain no provider payload or conversation content. */
 export class TelemetryRuntime {
-  private readonly pending: PendingRequest[] = [];
+  private readonly pending: Pending[] = [];
+  private profileKey: string | undefined;
   constructor(readonly writer: TelemetryWriter) {}
-
-  decision(decision: RoutingDecision, promptChars: number, mode: "shadow" | "enforce", recommendedEffort: Effort, appliedEffort: string | undefined, promptHash: string, promptText?: string): void {
-    const bounded = promptText === undefined ? undefined : promptText.slice(0, 4096);
-    this.writer.writeDecision({ schemaVersion: 1, policyVersion: decision.policyVersion, sessionHash: this.writer.sessionHash, epochId: decision.epochId, decisionId: decision.id, relation: decision.relation, taskClass: decision.taskClass, recommendedEffort, ...(appliedEffort ? { appliedEffort } : {}), mode, promptHash, promptChars, ...(bounded === undefined ? {} : { promptText: bounded }), ...(promptText !== undefined && promptText.length > bounded!.length ? { promptTextTruncated: true } : {}), features: decision.features, reasons: decision.reasons, timestamp: decision.timestamp });
+  decision(decision: RoutingDecision, profile: ProfileObservation, mode: "shadow" | "enforce", prompt?: string): void {
+    const bounded = prompt?.slice(0, 4096);
+    this.writer.writeDecision({ schemaVersion: 1, policyVersion: decision.policyVersion, sessionHash: this.writer.sessionHash, epochId: decision.epochId, decisionId: decision.id, relation: decision.relation, taskClass: decision.taskClass, profile, mode, promptHash: "redacted", promptChars: prompt?.length ?? 0, ...(bounded === undefined ? {} : { promptText: bounded }), features: decision.features, reasons: decision.reasons, timestamp: decision.timestamp });
   }
-
-  request(epoch: TaskEpoch, model: (ProviderModel & { id?: unknown; provider?: unknown }) | undefined, payload: unknown, mode: "shadow" | "enforce", outcome: ProviderPatchOutcome | { status: "shadow"; originalEffort?: string; appliedEffort?: string }): void {
-    const originalEffort = outcome.originalEffort ?? effortIn(payload);
-    const appliedEffort = outcome.status === "applied" || outcome.status === "shadow" ? outcome.appliedEffort : undefined;
-    this.pending.push({ epochId: epoch.id, requestIndex: epoch.requestCount, provider: typeof model?.provider === "string" ? model.provider : "unknown", api: typeof model?.api === "string" ? model.api : "unknown", model: typeof model?.id === "string" ? model.id : "unknown", ...(originalEffort ? { originalEffort } : {}), ...(appliedEffort !== undefined ? { appliedEffort } : {}), patchStatus: outcome.status, ...(this.pending.length > 0 ? { correlationError: "concurrent_pending_request" as const } : {}), startedAt: this.writer.timestamp() });
+  request(epoch: TaskEpoch, profile: ProfileObservation, decisionId: string | undefined, model: { provider?: unknown; api?: unknown; id?: unknown } | undefined, outcome: ProviderPatchOutcome | { status: "shadow"; originalEffort?: string }): void {
+    const nextKey = JSON.stringify(profile);
+    if (this.profileKey !== undefined && this.profileKey !== nextKey) this.flushUnsettled("profile_boundary");
+    this.profileKey = nextKey;
+    this.pending.push({ epoch, profile: decisionId === undefined ? identityObservation(profile) : profile, ...(decisionId === undefined ? {} : { decisionId }), index: epoch.requestCount, provider: typeof model?.provider === "string" ? model.provider : "unknown", api: typeof model?.api === "string" ? model.api : "unknown", model: typeof model?.id === "string" ? model.id : "unknown", outcome, startedAt: this.writer.timestamp() });
   }
-
   response(stopReason: string | undefined, usage?: Usage): void {
-    const pending = this.pending.shift();
-    if (!pending) { this.writer.writeRequest({ schemaVersion: 1, sessionHash: this.writer.sessionHash, epochId: "unknown", requestIndex: 0, provider: "unknown", api: "unknown", model: "unknown", patchStatus: "policy_failed", correlationError: "missing_pending_request" }); return; }
-    this.writer.writeRequest({ schemaVersion: 1, sessionHash: this.writer.sessionHash, epochId: pending.epochId, requestIndex: pending.requestIndex, provider: pending.provider, api: pending.api, model: pending.model, ...(pending.originalEffort ? { originalEffort: pending.originalEffort } : {}), ...(pending.appliedEffort ? { appliedEffort: pending.appliedEffort } : {}), patchStatus: pending.patchStatus, ...usage, ...(stopReason ? { stopReason } : {}), ...(pending.correlationError ? { correlationError: pending.correlationError } : {}), latencyMs: this.writer.timestamp() - pending.startedAt });
+    if (this.pending.length !== 1) { this.flushUnsettled("ambiguous_response"); return; }
+    const pending = this.pending.shift(); if (!pending) return;
+    this.write(pending, { ...usage, ...(stopReason === undefined ? {} : { stopReason }), latencyMs: this.writer.timestamp() - pending.startedAt });
   }
-
-  epoch(epoch: TaskEpoch): void { this.writer.writeEpoch({ schemaVersion: 1, sessionHash: this.writer.sessionHash, epochId: epoch.id, status: epoch.status, taskClass: epoch.taskClass, requestCount: epoch.requestCount, toolCallCount: epoch.toolCallCount, toolErrorCount: epoch.toolErrorCount, providerErrorCount: epoch.providerErrorCount, startedAt: epoch.createdAt, endedAt: epoch.lastActivityAt }); }
-  flushUnsettled(): void {
-    for (const pending of this.pending.splice(0)) this.writer.writeRequest({ schemaVersion: 1, sessionHash: this.writer.sessionHash, epochId: pending.epochId, requestIndex: pending.requestIndex, provider: pending.provider, api: pending.api, model: pending.model, ...(pending.originalEffort ? { originalEffort: pending.originalEffort } : {}), ...(pending.appliedEffort ? { appliedEffort: pending.appliedEffort } : {}), patchStatus: pending.patchStatus, correlationError: "unsettled_request" });
-  }
+  epoch(epoch: TaskEpoch, profile: ProfileObservation): void { this.writer.writeEpoch({ schemaVersion: 1, sessionHash: this.writer.sessionHash, epochId: epoch.id, status: epoch.status, taskClass: epoch.taskClass, requestCount: epoch.requestCount, toolCallCount: epoch.toolCallCount, toolErrorCount: epoch.toolErrorCount, providerErrorCount: epoch.providerErrorCount, startedAt: epoch.createdAt, endedAt: epoch.lastActivityAt, profile }); }
+  flushUnsettled(error: FlushReason = "unsettled_request"): void { for (const pending of this.pending.splice(0)) this.write(pending, { correlationError: error }); }
+  private write(p: Pending, extra: Record<string, unknown>): void { const o = p.outcome; this.writer.writeRequest({ schemaVersion: 1, sessionHash: this.writer.sessionHash, epochId: p.epoch.id, requestIndex: p.index, provider: p.provider, api: p.api, model: p.model, profile: p.profile, ...(p.decisionId === undefined ? { correlationError: "no_decision" } : { decisionId: p.decisionId }), ...(o.originalEffort === undefined ? {} : { originalEffort: o.originalEffort }), ...(o.status === "applied" ? { locallyAppliedProviderValue: o.appliedEffort } : {}), patchStatus: o.status, ...extra } as import("./records.js").RequestRecord); }
 }
 
-function effortIn(payload: unknown): string | undefined {
-  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return undefined;
-  const reasoning = (payload as Record<string, unknown>).reasoning;
-  return typeof reasoning === "object" && reasoning !== null && !Array.isArray(reasoning) && typeof (reasoning as Record<string, unknown>).effort === "string" ? (reasoning as Record<string, string>).effort : undefined;
+function identityObservation(profile: ProfileObservation): ProfileObservation {
+  const { capability, admission, model, generation } = profile;
+  return { capability, admission, model, generation };
 }

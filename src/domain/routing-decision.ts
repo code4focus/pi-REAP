@@ -1,4 +1,4 @@
-import type { AutomaticEffort, Effort } from "./effort.js";
+import type { ResolvedRung, RungSelector } from "./profile.js";
 import type { TaskClass } from "./task-epoch.js";
 
 export type ReasonCode =
@@ -29,9 +29,11 @@ export interface RoutingDecision {
   epochId: string;
   relation: "new" | "continuation" | "ambiguous";
   taskClass: TaskClass;
-  selectedEffort: AutomaticEffort;
-  effectiveFloor: Effort;
-  confidence: "high" | "medium" | "low";
+  /** Exact factory-compiled admission selector, never inferred from the rung. */
+  selector: RungSelector;
+  selectedRung: ResolvedRung;
+  effectiveFloor: ResolvedRung;
+  confidence: "strong" | "moderate" | "weak";
   reasons: ReasonCode[];
   features: RoutingFeatures;
   timestamp: number;
