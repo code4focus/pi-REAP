@@ -7,7 +7,8 @@ export interface ImplementationBinding {
 
 /**
  * Immutable, normalized-only v3 canary metadata. It is historical evidence,
- * not a current promotion binding: its cache verdict is OBSERVABILITY_UNAVAILABLE.
+ * not a current promotion binding: its cache verdict is
+ * OBSERVABILITY_UNAVAILABLE and it predates the corrected prerequisite base.
  */
 export const historicalV3CanaryBinding: ImplementationBinding = Object.freeze({
   acceptedBaseSha256: "cbdbf256286ee7fb3d05e52ac7d702dfc0838ec6",
@@ -17,7 +18,7 @@ export const historicalV3CanaryBinding: ImplementationBinding = Object.freeze({
 
 /** Current corrected implementation binding, reproduced offline after build. */
 export const currentImplementationBinding: ImplementationBinding = Object.freeze({
-  acceptedBaseSha256: "905a067f145a61cdf7203718a8e09b400952463a",
-  sourceFingerprint: "e87ffe3fbbeec2125ae33aedad1d1687df1efae0722f3e3b5e55da5edf373bf9",
-  extensionBuildFingerprint: "cb737689cb098b80f17f9fe6640427c797bc3c5e558a86e7684eb0fc8704127d",
+  acceptedBaseSha256: "53f312375293a80fa948c3fc8122fbc74471bc53",
+  sourceFingerprint: "a1039706103219272aac8eb724805c519171ba8a46ff884fe259dc2d5c819d18",
+  extensionBuildFingerprint: "b1694b40c28a63bf27ae8babf32f716c8b0b9294aa817b3d082092c53f80cab9",
 });

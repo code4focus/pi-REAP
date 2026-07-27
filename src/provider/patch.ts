@@ -1,57 +1,131 @@
-import { createHash } from "node:crypto";
-import type { Effort } from "../domain/effort.js";
+import {
+  canonicalJson,
+  canonicalProfileDigest,
+  isTrustedBoundProviderSelection,
+  resolveProfile,
+  type DigestResult,
+  type ProfileBinding,
+  type ResolvedRung,
+} from "../domain/profile.js";
 
 export const supportedProviderApis = ["openai-codex-responses", "openai-responses"] as const;
 export type SupportedProviderApi = (typeof supportedProviderApis)[number];
-export interface ProviderModel { api?: unknown; reasoning?: unknown; thinkingLevelMap?: unknown; }
-export type ProviderPatchStatus = "applied" | "unsupported" | "invalid_payload" | "mapping_failed";
-export type ProviderPatchOutcome =
-  | { payload: unknown; status: "applied"; originalEffort?: string; appliedEffort: string }
-  | { payload: unknown; status: "unsupported" | "invalid_payload" | "mapping_failed"; originalEffort?: string; appliedEffort?: never };
-export interface EffortMutationConflict { code: "later_effort_mutator"; expectedEffort: string; observedEffort: string; message: string; }
+
 type RecordValue = Record<string, unknown>;
-const isRecord = (value: unknown): value is RecordValue => typeof value === "object" && value !== null && !Array.isArray(value);
-const isSupportedApi = (api: unknown): api is SupportedProviderApi => typeof api === "string" && (supportedProviderApis as readonly string[]).includes(api);
-/** True only for the two Pi/OpenAI Responses paths that expose reasoning effort. */
-export function supportsEffortRouting(model: ProviderModel | undefined): boolean { return model?.reasoning === true && isSupportedApi(model.api); }
-export function resolveProviderEffort(model: ProviderModel | undefined, desired: Effort): string | undefined {
-  if (model === undefined || !supportsEffortRouting(model)) return undefined;
-  const mappings = model.thinkingLevelMap;
-  if (mappings === undefined) return desired;
-  if (!isRecord(mappings)) return undefined;
-  const mapped = mappings[desired];
-  if (mapped === undefined) return desired;
-  if (typeof mapped === "string" && mapped.length > 0) return mapped;
-  if (mapped !== null || desired === "max") return undefined;
-  const automaticLevels: readonly Effort[] = ["low", "medium", "high", "xhigh"];
-  const start = automaticLevels.indexOf(desired);
-  for (const level of automaticLevels.slice(start + 1)) { const higher = mappings[level]; if (typeof higher === "string" && higher.length > 0) return higher; if (higher !== undefined && higher !== null) return undefined; }
-  return undefined;
+
+/** The complete, profile-bound input produced before a provider request. */
+export interface ProviderPatchInput {
+  /** Preferred PR3 contract: factory-issued immutable exact provider selection. */
+  readonly boundSelection?: unknown;
+  /** Legacy direct PR2 contract; retained for isolated adapter contract coverage. */
+  readonly identity?: unknown;
+  readonly capabilityProfile?: unknown;
+  readonly admissionProfile?: unknown;
+  readonly resolvedRung?: unknown;
 }
-export function patchReasoningEffort(payload: unknown, effort: string): unknown {
-  if (!isRecord(payload) || typeof effort !== "string" || effort.length === 0) return payload;
-  if (!("reasoning" in payload)) return { ...payload, reasoning: { effort } };
-  const reasoning = payload.reasoning;
-  if (!isRecord(reasoning) || ("effort" in reasoning && typeof reasoning.effort !== "string")) return payload;
-  return { ...payload, reasoning: { ...reasoning, effort } };
+
+export type ProviderPatchOutcome =
+  | { readonly status: "applied"; readonly payload: unknown; readonly originalEffort?: string; readonly appliedEffort: string }
+  | { readonly status: "unsupported" | "invalid_payload" | "mapping_failed"; readonly payload: unknown; readonly originalEffort?: string };
+
+const isRecord = (value: unknown): value is RecordValue =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+/** True only for the two v1 Responses APIs; profile admission remains authoritative. */
+export const supportsEffortRouting = (api: unknown): api is SupportedProviderApi =>
+  typeof api === "string" && (supportedProviderApis as readonly string[]).includes(api);
+
+const sameBinding = (left: ProfileBinding, right: ProfileBinding): boolean =>
+  left.capability.profileId === right.capability.profileId
+  && left.capability.profileRevision === right.capability.profileRevision
+  && left.capability.profileDigest === right.capability.profileDigest
+  && left.admission.profileId === right.admission.profileId
+  && left.admission.profileRevision === right.admission.profileRevision
+  && left.admission.profileDigest === right.admission.profileDigest
+  && left.match.provider === right.match.provider
+  && left.match.api === right.match.api
+  && left.match.model === right.match.model
+  && left.match.modelCatalogRevision === right.match.modelCatalogRevision
+  && left.match.modelCatalogDigest === right.match.modelCatalogDigest
+  && left.match.piVersion === right.match.piVersion
+  && left.match.providerAdapterRevision === right.match.providerAdapterRevision
+  && left.match.providerAdapterDigest === right.match.providerAdapterDigest;
+
+function resolvedProviderEffort(input: ProviderPatchInput): string | undefined {
+  try {
+    if (Object.hasOwn(input, "boundSelection")) {
+      return isTrustedBoundProviderSelection(input.boundSelection) && supportsEffortRouting(input.boundSelection.api)
+        ? input.boundSelection.effort
+        : undefined;
+    }
+    const resolution = resolveProfile(input.identity, input.capabilityProfile, input.admissionProfile);
+    if (resolution.status !== "resolved" || !supportsEffortRouting(resolution.binding.match.api)) return undefined;
+
+    const candidate = input.resolvedRung as Partial<ResolvedRung> | null;
+    if (!candidate || typeof candidate !== "object" || !sameBinding(candidate.binding as ProfileBinding, resolution.binding)) {
+      return undefined;
+    }
+    if (typeof candidate.rungId !== "string" || !Number.isSafeInteger(candidate.ordinal)) return undefined;
+    const rung = resolution.capability.rungs.find((value) =>
+      value.id === candidate.rungId && value.ordinal === candidate.ordinal,
+    );
+    // V1 Responses encodes effort as a non-empty provider-owned string only.
+    return rung && typeof rung.providerValue === "string" && rung.providerValue.length > 0
+      ? rung.providerValue
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
-export function patchProviderPayload(model: ProviderModel | undefined, payload: unknown, desired: Effort): unknown { const effort = resolveProviderEffort(model, desired); return effort === undefined ? payload : patchReasoningEffort(payload, effort); }
-/** A truthful patch result: failure outcomes retain the identical payload object. */
-export function patchProviderPayloadOutcome(model: ProviderModel | undefined, payload: unknown, desired: Effort): ProviderPatchOutcome {
+
+/**
+ * Changes only reasoning.effort for an exact, resolved profile-local rung.
+ * Every unsupported or malformed boundary returns the original object by reference.
+ */
+export function patchProviderPayload(input: ProviderPatchInput, payload: unknown): unknown {
+  const effort = resolvedProviderEffort(input);
+  if (effort === undefined || !isRecord(payload) || !canonicalJson(payload).ok) return payload;
+  try {
+    if (!Object.hasOwn(payload, "reasoning")) return { ...payload, reasoning: { effort } };
+    const reasoning = payload.reasoning;
+    if (!isRecord(reasoning) || (Object.hasOwn(reasoning, "effort") && typeof reasoning.effort !== "string")) {
+      return payload;
+    }
+    return { ...payload, reasoning: { ...reasoning, effort } };
+  } catch {
+    return payload;
+  }
+}
+
+/** Observability-only result. It never invents a provider value or changes patch semantics. */
+export function patchProviderPayloadOutcome(input: ProviderPatchInput | undefined, payload: unknown): ProviderPatchOutcome {
   const originalEffort = effortIn(payload);
-  if (!supportsEffortRouting(model)) return { payload, status: "unsupported", ...(originalEffort ? { originalEffort } : {}) };
-  const mapped = resolveProviderEffort(model, desired);
-  if (mapped === undefined) return { payload, status: "mapping_failed", ...(originalEffort ? { originalEffort } : {}) };
-  const patched = patchReasoningEffort(payload, mapped);
-  if (patched === payload) return { payload, status: "invalid_payload", ...(originalEffort ? { originalEffort } : {}) };
-  return { payload: patched, status: "applied", ...(originalEffort ? { originalEffort } : {}), appliedEffort: mapped };
+  if (!input || !Object.hasOwn(input, "boundSelection") || !isTrustedBoundProviderSelection(input.boundSelection)
+    || !supportsEffortRouting(input.boundSelection.api)) {
+    return { status: "unsupported", payload, ...(originalEffort === undefined ? {} : { originalEffort }) };
+  }
+  const patched = patchProviderPayload(input, payload);
+  if (patched === payload) {
+    return { status: canonicalJson(payload).ok ? "mapping_failed" : "invalid_payload", payload, ...(originalEffort === undefined ? {} : { originalEffort }) };
+  }
+  return { status: "applied", payload: patched, ...(originalEffort === undefined ? {} : { originalEffort }), appliedEffort: input.boundSelection.effort };
 }
-/** Local diagnostic only; Pi does not expose final provider-wire observation here. */
-export function diagnoseLaterEffortMutator(expectedEffort: string | undefined, observedEffort: string | undefined): EffortMutationConflict | undefined {
-  if (expectedEffort === undefined || observedEffort === undefined || expectedEffort === observedEffort) return undefined;
-  return { code: "later_effort_mutator", expectedEffort, observedEffort, message: `Local observation: reasoning.effort ${JSON.stringify(observedEffort)} after Pi REAP requested ${JSON.stringify(expectedEffort)}. This is not provider wire truth. Another later before_provider_request mutator may own the final value; remove it or place Pi REAP last, then verify with a final-payload logger.` };
+
+function effortIn(payload: unknown): string | undefined {
+  if (!isRecord(payload) || !isRecord(payload.reasoning)) return undefined;
+  return typeof payload.reasoning.effort === "string" ? payload.reasoning.effort : undefined;
 }
-export function withoutReasoningEffort(payload: unknown): unknown { if (!isRecord(payload) || !isRecord(payload.reasoning) || !("effort" in payload.reasoning)) return payload; const { effort: _effort, ...reasoning } = payload.reasoning; return { ...payload, reasoning }; }
-function effortIn(payload: unknown): string | undefined { return isRecord(payload) && isRecord(payload.reasoning) && typeof payload.reasoning.effort === "string" ? payload.reasoning.effort : undefined; }
-function canonicalize(value: unknown): string { if (value === null) return "null"; switch (typeof value) { case "string": return JSON.stringify(value); case "boolean": return value ? "true" : "false"; case "number": return Number.isFinite(value) ? String(value) : JSON.stringify(String(value)); case "undefined": return '"__undefined__"'; case "object": if (Array.isArray(value)) return `[${value.map(canonicalize).join(",")} ]`; if (isRecord(value)) return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalize(value[key])}`).join(",")}}`; return JSON.stringify(String(value)); default: return JSON.stringify(String(value)); } }
-export function canonicalPayloadHash(payload: unknown): string { return createHash("sha256").update(canonicalize(payload)).digest("hex"); }
+
+/** Removes only the mutable field for structural preservation assertions. */
+export function withoutReasoningEffort(payload: unknown): unknown {
+  if (!isRecord(payload) || !canonicalJson(payload).ok || !isRecord(payload.reasoning) || !Object.hasOwn(payload.reasoning, "effort")) {
+    return payload;
+  }
+  const { effort: _effort, ...reasoning } = payload.reasoning;
+  return { ...payload, reasoning };
+}
+
+/** Stable digest for closed sanitized JSON-like payloads, with typed failure. */
+export function canonicalPayloadHash(payload: unknown): DigestResult {
+  return canonicalProfileDigest(payload);
+}

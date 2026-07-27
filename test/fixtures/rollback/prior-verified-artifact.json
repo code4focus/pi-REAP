@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "provenance": "synthetic sanitized rollback fixture; not a real release artifact",
+  "recordId": "synthetic-prior-artifact-record-v1",
+  "priorArtifactIdentity": "pi-reap@0.9.0-synthetic#synthetic-prior-artifact-001",
+  "bindingDigest": "377635d87dbe65f85ba67c621ca8b4f6d44fa9488efaf57d7b413ab5ca2b1411",
+  "verification": {
+    "status": "verified",
+    "verifiedAt": "2026-01-01T00:00:00.000Z",
+    "verifier": "synthetic-offline-release-gate",
+    "releaseSequence": 1,
+    "evidenceDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "artifact": {
+    "identity": {
+      "artifactId": "synthetic-prior-artifact-001",
+      "artifactDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "packageName": "pi-reap",
+      "packageVersion": "0.9.0-synthetic",
+      "sourceFingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "buildFingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    },
+    "binding": {
+      "capability": {
+        "profileId": "synthetic-prior-capability",
+        "profileRevision": "synthetic-r1",
+        "profileDigest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "source": {
+          "kind": "repository-pinned",
+          "repositoryRevision": "synthetic-reviewed-prior"
+        }
+      },
+      "admission": {
+        "profileId": "synthetic-prior-admission",
+        "profileRevision": "synthetic-r1",
+        "profileDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "source": {
+          "kind": "repository-pinned",
+          "repositoryRevision": "synthetic-reviewed-prior"
+        },
+        "capabilityProfileId": "synthetic-prior-capability",
+        "capabilityProfileRevision": "synthetic-r1"
+      },
+      "match": {
+        "provider": "synthetic-provider",
+        "api": "synthetic-api",
+        "model": "synthetic-model",
+        "modelCatalogRevision": "synthetic-catalog-r1",
+        "modelCatalogDigest": "8888888888888888888888888888888888888888888888888888888888888888",
+        "piPackage": "@earendil-works/pi-coding-agent",
+        "piVersion": "0.82.1",
+        "providerAdapterRevision": "synthetic-adapter-r1",
+        "providerAdapterDigest": "9999999999999999999999999999999999999999999999999999999999999999"
+      }
+    }
+  }
+}

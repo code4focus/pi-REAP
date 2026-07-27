@@ -1,31 +1,44 @@
-import type { AutomaticEffort } from "../../src/domain/effort.js";
-import type { TaskClass } from "../../src/domain/task-epoch.js";
-import type { CorpusManifest, CorpusMode, CorpusTask } from "./types.js";
+import type { AdmissionProfile, ReasoningCapabilityProfile } from "../../src/domain/profile.js";
+import type { CorpusManifest, CorpusMode, CorpusTask, ProfileFixture } from "./types.js";
 
-const allEfforts = ["low", "medium", "high", "xhigh"] as const;
-const representativePrompt: Record<TaskClass, string> = {
-  simple_query: "What is JSON?",
-  bounded_read: "Explain this read-only file without changing it.",
-  implementation: "Implement this function and add its focused test.",
-  debugging: "Debug this failing test and identify the regression.",
-  architecture: "Design a migration plan for this cross-service architecture.",
-  high_risk: "Review this concurrent permission migration for data-loss and security failure risks.",
-  continuation: "Continue the previous implementation and verify the remaining test.",
-  unknown: "Help with this task.",
+const match = { provider: "openai", api: "openai-responses", model: "synthetic-evaluation", modelCatalogRevision: "catalog-r1", modelCatalogDigest: "a".repeat(64), piVersion: "0.82.1", providerAdapterRevision: "adapter-r1", providerAdapterDigest: "b".repeat(64) } as const;
+const selector = (kind: "lowest-automatic" | "automatic-ceiling" | "next-below-ceiling" | "anchor", name?: "economical" | "balanced" | "deliberate" | "exhaustive") => kind === "anchor" ? { kind, name: name! } as const : { kind } as const;
+function fixture(name: string, rungs: readonly { id: string; ordinal: number; value: string; automatic: boolean }[], initial: AdmissionProfile["initial"], source: ReasoningCapabilityProfile["source"] = { kind: "repository-pinned", repositoryRevision: "synthetic" }): ProfileFixture {
+  const automatic = rungs.filter((r) => r.automatic);
+  const capability: ReasoningCapabilityProfile = { schemaVersion: 1, profileId: `cap-${name}`, profileRevision: "r1", source, match, rungs: rungs.map((r) => ({ id: r.id, ordinal: r.ordinal, providerValue: r.value, automaticEligible: r.automatic, explicitOnly: !r.automatic })), automaticFloor: automatic[0]!.id, automaticCeiling: automatic.at(-1)!.id, ...(rungs.some((r) => !r.automatic) ? { explicitCeiling: rungs.at(-1)!.id } : {}), anchors: { economical: automatic[0]!.id, balanced: automatic[Math.min(1, automatic.length - 1)]!.id, deliberate: automatic.at(-1)!.id, exhaustive: automatic.at(-1)!.id }, baselineBehavior: "preserve-request" };
+  const admission: AdmissionProfile = { schemaVersion: 1, profileId: `adm-${name}`, profileRevision: "r1", source, capabilityProfileId: capability.profileId, capabilityProfileRevision: capability.profileRevision, initial, evidence: { firstToolError: { selector: selector("automatic-ceiling") }, repeatedToolError: { selector: selector("automatic-ceiling") }, providerError: { selector: selector("automatic-ceiling") }, lengthExhaustion: { selector: selector("automatic-ceiling") }, overflowRetry: { selector: selector("automatic-ceiling") }, failedContinuation: { selector: selector("automatic-ceiling") } } };
+  return { name, capability, admission, provenance: "synthetic" };
+}
+const allInitial = (value: AdmissionProfile["initial"]["simpleQuery"]): AdmissionProfile["initial"] => ({ simpleQuery: value, boundedRead: value, implementation: value, debugging: value, architecture: value, highRisk: value, continuation: value, unknown: value });
+export const profileFixtures = {
+  twoRung: fixture("two-rung", [{ id: "economy", ordinal: 0, value: "minimal", automatic: true }, { id: "deliberate", ordinal: 1, value: "high", automatic: true }], { ...allInitial(selector("lowest-automatic")), implementation: selector("anchor", "balanced"), continuation: selector("automatic-ceiling") }),
+  multiRung: fixture("multi-rung", [{ id: "low", ordinal: 0, value: "minimal", automatic: true }, { id: "mid", ordinal: 1, value: "medium", automatic: true }, { id: "high", ordinal: 2, value: "high", automatic: true }, { id: "max-auto", ordinal: 3, value: "xhigh", automatic: true }, { id: "manual", ordinal: 4, value: "max", automatic: false }], { ...allInitial(selector("lowest-automatic")), implementation: selector("anchor", "balanced"), debugging: selector("anchor", "deliberate"), continuation: selector("next-below-ceiling") }),
+  alias: fixture("alias", [{ id: "low", ordinal: 0, value: "minimal", automatic: true }, { id: "high", ordinal: 1, value: "high", automatic: true }], allInitial(selector("anchor", "balanced"))),
+  explicitOnly: fixture("explicit-only", [{ id: "low", ordinal: 0, value: "minimal", automatic: true }, { id: "manual", ordinal: 1, value: "xhigh", automatic: false }], allInitial(selector("lowest-automatic"))),
+  revisedTwoRung: (() => {
+    const base = fixture("two-rung-revision-r2", [{ id: "economy", ordinal: 0, value: "minimal", automatic: true }, { id: "deliberate", ordinal: 1, value: "high", automatic: true }], allInitial(selector("lowest-automatic")));
+    return { ...base, capability: { ...base.capability, profileRevision: "r2" }, admission: { ...base.admission, profileRevision: "r2", capabilityProfileRevision: "r2" } } satisfies ProfileFixture;
+  })(),
+  candidateCapability: (() => { const base = fixture("candidate-capability", [{ id: "low", ordinal: 0, value: "minimal", automatic: true }, { id: "high", ordinal: 1, value: "high", automatic: true }], allInitial(selector("lowest-automatic"))); return { ...base, capability: { ...base.capability, source: { kind: "validated-catalog-candidate", authority: "candidate-only", evidenceDigest: "c".repeat(64) } } } satisfies ProfileFixture; })(),
+  candidateAdmission: (() => { const base = fixture("candidate-admission", [{ id: "low", ordinal: 0, value: "minimal", automatic: true }, { id: "high", ordinal: 1, value: "high", automatic: true }], allInitial(selector("lowest-automatic"))); return { ...base, admission: { ...base.admission, source: { kind: "validated-catalog-candidate", authority: "candidate-only", evidenceDigest: "d".repeat(64) } } } satisfies ProfileFixture; })(),
+  conflict: (() => { const base = fixture("conflict", [{ id: "low", ordinal: 0, value: "minimal", automatic: true }, { id: "high", ordinal: 1, value: "high", automatic: true }], allInitial(selector("lowest-automatic"))); return { ...base, admission: { ...base.admission, capabilityProfileId: "cap-unrelated" } } satisfies ProfileFixture; })(),
+  referenceMismatch: (() => { const base = fixture("reference-mismatch", [{ id: "low", ordinal: 0, value: "minimal", automatic: true }, { id: "high", ordinal: 1, value: "high", automatic: true }], allInitial(selector("lowest-automatic"))); return { ...base, admission: { ...base.admission, capabilityProfileRevision: "r9" } } satisfies ProfileFixture; })(),
 };
-const task = (id: string, mode: CorpusMode, taskClass: TaskClass, acceptedEfforts: readonly AutomaticEffort[], candidateEfforts: readonly AutomaticEffort[] = allEfforts): CorpusTask => ({ id, mode, taskClass, provenance: "synthetic", description: representativePrompt[taskClass], acceptedEfforts, candidateEfforts, grader: { kind: "exact", expected: `synthetic-${id}-answer` } });
-const smokeClasses: readonly TaskClass[] = ["simple_query", "bounded_read", "implementation", "debugging", "architecture", "high_risk", "continuation", "unknown", "simple_query", "bounded_read", "implementation", "debugging"];
-const smoke = smokeClasses.map((taskClass, index) => task(`smoke-${index + 1}`, "smoke", taskClass, index < 2 ? ["low", "medium", "high", "xhigh"] : index < 5 ? ["medium", "high", "xhigh"] : ["high", "xhigh"]));
-const calibrationClasses: readonly TaskClass[] = ["simple_query", "bounded_read", "implementation", "debugging", "architecture", "high_risk", "continuation", "unknown", "simple_query", "bounded_read"];
-const calibration = Array.from({ length: 30 }, (_, index) => { const taskClass = calibrationClasses[index % calibrationClasses.length]!; const candidates = taskClass === "simple_query" ? (["low", "medium", "high"] as const) : taskClass === "high_risk" ? (["high", "xhigh"] as const) : allEfforts; return task(`calibration-${index + 1}`, "calibration", taskClass, candidates, candidates); });
-const regression = [
-  task("regression-implementation", "regression", "implementation", ["high", "xhigh"]),
-  task("regression-debugging", "regression", "debugging", ["high", "xhigh"]),
-  task("regression-architecture", "regression", "architecture", ["high", "xhigh"]),
-  task("regression-high-risk", "regression", "high_risk", ["xhigh"]),
-  task("regression-continuation", "regression", "continuation", ["high", "xhigh"]),
-  { ...task("regression-under-routing-review", "regression", "simple_query", ["high", "xhigh"], ["low", "high", "xhigh"]), underRoutingFixture: true as const, nonCriticalRejection: true as const },
+const task = (id: string, mode: CorpusMode, profile: ProfileFixture, description: string, profileState: CorpusTask["profileState"] = "resolved", boundary?: CorpusTask["boundary"]): CorpusTask => ({ id, mode, profile, profileState, ...(boundary ? { boundary } : {}), taskClass: "oracle-only", provenance: "synthetic", description, expectedOutput: `synthetic-${id}-answer` });
+const valid = [task("regression-two", "regression", profileFixtures.twoRung, "What is JSON?"), task("regression-revised", "regression", profileFixtures.revisedTwoRung, "What is JSON?"), task("regression-multi", "regression", profileFixtures.multiRung, "Implement a small feature."), task("regression-alias", "regression", profileFixtures.alias, "Read this file."), task("regression-explicit", "regression", profileFixtures.explicitOnly, "What is JSON?")];
+const failed = [
+  task("regression-missing", "regression", profileFixtures.twoRung, "What is JSON?", "missing", { kind: "missing-activation" }),
+  task("regression-unknown-model", "regression", profileFixtures.twoRung, "What is JSON?", "unknown", { kind: "live-context-mismatch", model: { model: "unknown-model" } }),
+  task("regression-candidate-capability", "regression", profileFixtures.candidateCapability, "What is JSON?", "candidate-capability"),
+  task("regression-candidate-admission", "regression", profileFixtures.candidateAdmission, "What is JSON?", "candidate-admission"),
+  task("regression-conflict", "regression", profileFixtures.conflict, "What is JSON?", "conflict"),
+  task("regression-reference-mismatch", "regression", profileFixtures.referenceMismatch, "What is JSON?", "reference-mismatch"),
+  task("regression-catalog-mismatch", "regression", profileFixtures.twoRung, "What is JSON?", "attestation-mismatch", { kind: "factory-activation", attestation: { modelCatalogRevision: "catalog-r2" } }),
+  task("regression-catalog-digest-mismatch", "regression", profileFixtures.twoRung, "What is JSON?", "attestation-mismatch", { kind: "factory-activation", attestation: { modelCatalogDigest: "e".repeat(64) } }),
+  task("regression-pi-mismatch", "regression", profileFixtures.twoRung, "What is JSON?", "attestation-mismatch", { kind: "factory-activation", attestation: { piVersion: "0.82.2" } }),
+  task("regression-adapter-revision-mismatch", "regression", profileFixtures.twoRung, "What is JSON?", "attestation-mismatch", { kind: "factory-activation", attestation: { providerAdapterRevision: "adapter-r2" } }),
+  task("regression-adapter-digest-mismatch", "regression", profileFixtures.twoRung, "What is JSON?", "attestation-mismatch", { kind: "factory-activation", attestation: { providerAdapterDigest: "f".repeat(64) } }),
+  task("regression-provider-mismatch", "regression", profileFixtures.twoRung, "What is JSON?", "unknown", { kind: "live-context-mismatch", model: { provider: "other" } }),
+  task("regression-api-mismatch", "regression", profileFixtures.twoRung, "What is JSON?", "unknown", { kind: "live-context-mismatch", model: { api: "other-api" } }),
 ];
-
-/** Deliberately synthetic representative tasks; no fixture represents a live Pi or provider run. */
-export const syntheticManifest: CorpusManifest = { schemaVersion: 1, name: "synthetic-pr5-representative", sourceSafety: "synthetic fixtures only", stages: { smoke: { minimumTasks: 12, repetitions: 2, requiredCandidateEfforts: allEfforts }, calibration: { minimumTasks: 30, repetitions: 3 } }, tasks: [...smoke, ...calibration, ...regression] };
+export const syntheticManifest: CorpusManifest = { schemaVersion: 2, name: "synthetic-profile-pr5", sourceSafety: "synthetic fixtures only", stages: { smoke: { minimumTasks: 6, repetitions: 1 }, calibration: { minimumTasks: 6, repetitions: 1 }, regression: { minimumTasks: 5, repetitions: 1 } }, tasks: [task("smoke-two", "smoke", profileFixtures.twoRung, "What is JSON?"), task("smoke-multi", "smoke", profileFixtures.multiRung, "Implement a small feature."), task("smoke-alias", "smoke", profileFixtures.alias, "Read this file."), task("smoke-explicit", "smoke", profileFixtures.explicitOnly, "What is JSON?"), task("smoke-unknown", "smoke", profileFixtures.twoRung, "What is JSON?", "unknown", { kind: "live-context-mismatch", model: { model: "unknown-model" } }), task("smoke-missing", "smoke", profileFixtures.twoRung, "What is JSON?", "missing", { kind: "missing-activation" }), task("cal-two", "calibration", profileFixtures.twoRung, "What is JSON?"), task("cal-multi", "calibration", profileFixtures.multiRung, "Implement a small feature."), task("cal-alias", "calibration", profileFixtures.alias, "Read this file."), task("cal-explicit", "calibration", profileFixtures.explicitOnly, "What is JSON?"), task("cal-candidate-capability", "calibration", profileFixtures.candidateCapability, "What is JSON?", "candidate-capability"), task("cal-conflict", "calibration", profileFixtures.conflict, "What is JSON?", "conflict"), ...valid, ...failed] };

@@ -2,13 +2,17 @@
 
 ## Release gate
 
-Run `pnpm release:check` locally. It is the authoritative, non-recursive local gate: fixture verification; root and evaluation builds; lint; both type checks; sample/evaluation gate; full tests; rollback dry-run; and package dry-run all run in that order. The release-gate workflow runs this same command on pull requests, manual dispatches, and version tags.
+Run `pnpm release:check` locally. It is the authoritative, non-recursive local gate: fixture verification; profile registry verification; root and evaluation builds; lint; both type checks; sample/evaluation gate; full tests; rollback dry-run; and package dry-run all run in that order. The release-gate workflow runs this same command on pull requests, branch pushes, manual dispatches, and version tags.
 
 Signing and publication are external, approved release-environment steps and are deliberately not performed by this repository automation. Before them, review `docs/OPERATIONS.md` for restricted claims; do not convert unavailable cache observations into a pass or promote enforcement by default.
 
 ## Pi package installation
 
 The 1.0.0 package declares `pi.extensions: ["./src/index.ts"]`; Pi resource paths are package-root-relative. Pi can load the source entry from local and git packages, while the built `main`, `exports`, and `types` entries are checked before packing.
+
+`profiles/` is also packaged. Its current entries are candidate-only, so package installation does not pin a profile, qualify a profile, or enable enforcement. Use the documented profile workflow before adding an approved repository-pinned entry.
+
+Both the peer and development dependency on `@earendil-works/pi-coding-agent` are exactly `0.82.1`. `pnpm package:check` creates and unpacks a real tarball in a clean temporary directory, validates the realpath-contained coding-agent, `pi-ai`, and `pi-agent-core` graph against the pinned CLI/runtime/catalog fingerprints, imports the built entry, and executes all three packaged profile commands. Missing, substituted, escaping-symlink, or same-version fabricated graphs fail. The temporary artifact is deleted after inspection; nothing is published.
 
 ```sh
 pnpm build
@@ -33,9 +37,9 @@ The release gate has least-privilege `contents: read` permission and uses only r
 
 ## Rollback
 
-1. Select the prior verified artifact and its exact Pi compatibility pin.
-2. Run `pnpm rollback:check` and the same mandatory and quality gates used for release.
+1. Select the prior verified artifact record with exact package/build, capability/admission profile, source, catalog, adapter, and Pi compatibility bindings.
+2. Run `pnpm rollback:check`; it rejects a missing, unverified, mismatched, or content-mutated record. Then run the same mandatory and quality gates used for release.
 3. Publish the prior artifact only through the approved external release process.
 4. Record the release restriction and any unavailable external observation; do not weaken, skip, or redefine any gate to make rollback succeed.
 
-`pnpm rollback:check` is a local dry-run exercise. It intentionally refuses a non-dry-run invocation so a rollback cannot silently publish or bypass gates.
+`pnpm rollback:check` validates a content-addressed, explicitly synthetic repository fixture as the offline procedure exercise. The fixture carries one canonical combined binding over its prior-artifact identity, package/source/build identity, both profiles and sources, admission capability reference, and exact model/catalog/Pi/adapter match. The index is only a contained locator; the release contract independently pins the expected synthetic record and binding digests, so rewriting the record and recomputing the index cannot authorize a rollback. The command intentionally refuses a non-dry-run invocation and never mutates package, settings, tag, or release state.

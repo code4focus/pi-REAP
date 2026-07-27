@@ -5,6 +5,7 @@ if (!process.argv.includes("--dry-run")) throw new Error("Release publication is
 /** Ordered local gates. This script never invokes release:check, avoiding test recursion. */
 export const releaseGateCommands = Object.freeze([
   ["pnpm", ["fixtures:verify"]],
+  ["pnpm", ["profile:verify"]],
   ["pnpm", ["build"]],
   ["pnpm", ["eval:build"]],
   ["pnpm", ["lint"]],

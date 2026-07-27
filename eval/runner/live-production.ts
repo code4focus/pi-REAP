@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
@@ -10,31 +10,28 @@ import {
 } from "./live-driver.js";
 import { recordPiAssistantUsage } from "./live-observability.js";
 import type { AutomaticEffort } from "../../src/domain/effort.js";
-import type { EffortRouterConfig } from "../../src/config/schema.js";
 import type { ExtensionOptions } from "../../src/index.js";
 import { effectiveCostMicros } from "./cost.js";
-import type { UsageMetrics } from "./types.js";
+import type { MeasuredUsage } from "./types.js";
 import { currentImplementationBinding } from "./live-acceptance-pins.js";
 import { extensionBuildFingerprint, sourceManifestFingerprint } from "./source-fingerprints.js";
+import {
+  expectedPiVersion,
+  piCodingAgentPackageName,
+  resolveStrictPiGraph,
+  type StrictPiGraph,
+} from "../../src/distribution/pi-graph-contract.js";
 
 const sentinelName = ".pi-reap-pr6-live-sentinel";
-const piPackageName = "@earendil-works/pi-coding-agent";
-const piVersion = "0.82.1";
-const piRuntimeManifest = [
-  "package.json", "dist/index.js", "dist/core/sdk.js", "dist/core/agent-session.js", "dist/core/model-runtime.js",
-  "dist/core/resource-loader.js", "dist/core/settings-manager.js", "dist/core/session-manager.js",
-  "dist/core/extensions/loader.js", "dist/core/extensions/runner.js", "dist/core/auth-storage.js",
-  "node_modules/@earendil-works/pi-agent-core/dist/agent.js", "node_modules/@earendil-works/pi-agent-core/dist/agent-loop.js",
-  "node_modules/@earendil-works/pi-ai/dist/models.js", "node_modules/@earendil-works/pi-ai/dist/auth/resolve.js",
-  "node_modules/@earendil-works/pi-ai/dist/api/openai-codex-responses.js", "node_modules/@earendil-works/pi-ai/dist/api/openai-responses-shared.js",
-] as const;
 
 export interface InstalledPi {
   readonly executablePath: string;
   readonly packageRoot: string;
   readonly piAiRoot: string;
+  readonly piAgentCoreRoot: string;
   readonly packageJsonPath: string;
   readonly catalogPath: string;
+  readonly responsesSharedPath: string;
   readonly catalog: CatalogModel;
   readonly cachePrefixMeasurement: CachePrefixMeasurementCapability;
 }
@@ -47,11 +44,12 @@ export interface PrivateRoot {
 
 export interface PiTerminalAssistantUsage { readonly input: number; readonly output: number; readonly cacheRead: number; readonly cacheWrite: number; readonly reasoning?: number }
 export interface PiResponsesSharedModule { readonly processResponsesStream: Function }
+export type PiResponsesModuleImporter = (specifier: string) => Promise<unknown>;
 /** The exact production terminal-usage boundary; raw field presence is unavailable after Pi normalization. */
-export function liveUsageFromPiAssistantUsage(assistantUsage: PiTerminalAssistantUsage): { readonly usage: UsageMetrics; readonly cacheUsageProvenance: CacheUsageProvenance } {
+export function liveUsageFromPiAssistantUsage(assistantUsage: PiTerminalAssistantUsage): { readonly usage: MeasuredUsage; readonly cacheUsageProvenance: CacheUsageProvenance } {
   const cache = recordPiAssistantUsage(assistantUsage);
   if (cache.rawCachedTokens.status !== "unavailable_at_pi_normalized_boundary") throw new Error("Pi terminal usage must not claim raw cache-field presence");
-  const usage: UsageMetrics = {
+  const usage: MeasuredUsage = {
     uncachedInputTokens: assistantUsage.input, cacheReadTokens: cache.liveEvalCacheReadTokens, cacheWriteTokens: assistantUsage.cacheWrite,
     inputTokens: assistantUsage.input + cache.liveEvalCacheReadTokens,
     outputTokens: assistantUsage.output, reasoningTokens: assistantUsage.reasoning ?? 0,
@@ -74,33 +72,46 @@ export function validateProductionBuild(repositoryRoot: string): { readonly sour
 
 /** Offline only: resolves the installed executable, package, and built-in catalog without creating auth/runtime state. */
 export function loadInstalledPi(): InstalledPi {
-  const resolved = resolveInstalledExecutable();
-  const { executablePath, packageRoot, cliPath } = resolved;
-  const piAiRoot = resolveInstalledDependency(packageRoot, "@earendil-works/pi-ai");
-  const piAgentCoreRoot = resolveInstalledDependency(packageRoot, "@earendil-works/pi-agent-core");
-  const packageJsonPath = join(packageRoot, "package.json");
-  const catalogPath = join(piAiRoot, "dist", "providers", "data", "openai-codex.json");
-  const packageBytes = readFileSync(packageJsonPath); const pkg = JSON.parse(packageBytes.toString("utf8")) as Record<string, unknown>;
-  const bin = pkg.bin as Record<string, unknown> | undefined;
-  if (pkg.name !== piPackageName || pkg.version !== piVersion || bin?.pi !== "dist/cli.js" || realpathSync(join(packageRoot, bin.pi)) !== cliPath) throw new Error("unsupported installed Pi runtime");
-  validateInstalledPackage(piAiRoot, "@earendil-works/pi-ai");
-  validateInstalledPackage(piAgentCoreRoot, "@earendil-works/pi-agent-core");
+  const graph = resolveInstalledPiGraph();
+  const {
+    codingAgentRoot: packageRoot,
+    piAiRoot,
+    piAgentCoreRoot,
+    codingAgentPackageJsonPath: packageJsonPath,
+    catalogPath,
+    responsesSharedPath,
+    cliPath,
+  } = graph;
   const catalogBytes = readFileSync(catalogPath); const data = JSON.parse(catalogBytes.toString("utf8")) as Record<string, Record<string, unknown>>;
   const model = data["openai-codex-responses"]?.["gpt-5.4-mini"] as { api?: unknown; reasoning?: unknown; cost?: Record<string, unknown> } | undefined;
   if (!model) throw new Error("configured Pi model absent from installed catalog");
   const catalog: CatalogModel = {
     id: "openai-codex/gpt-5.4-mini", api: String(model.api), reasoning: model.reasoning === true,
     ratesPerMillion: { input: Number(model.cost?.input), output: Number(model.cost?.output), cacheRead: Number(model.cost?.cacheRead), cacheWrite: Number(model.cost?.cacheWrite) },
-    piExecutableSha256: digestFile(cliPath), piPackageSha256: installedPackageFingerprint(packageRoot, piAiRoot, piAgentCoreRoot), piCatalogSha256: sha256(catalogBytes), piPackageVersion: piVersion,
+    piExecutableSha256: graph.piExecutableSha256,
+    piPackageSha256: graph.piRuntimeGraphSha256,
+    piCatalogSha256: graph.piCatalogSha256,
+    piPackageVersion: expectedPiVersion,
   };
-  return Object.freeze({ executablePath, packageRoot, piAiRoot, packageJsonPath, catalogPath, catalog, cachePrefixMeasurement: exactCachePrefixMeasurement() });
+  return Object.freeze({
+    executablePath: cliPath,
+    packageRoot,
+    piAiRoot,
+    piAgentCoreRoot,
+    packageJsonPath,
+    catalogPath,
+    responsesSharedPath,
+    catalog,
+    cachePrefixMeasurement: exactCachePrefixMeasurement(),
+  });
 }
 
-/** Loads the parser only through an already fingerprint-validated Pi 0.82.1 package root. */
-export async function loadInstalledPiResponsesShared(): Promise<PiResponsesSharedModule> {
+/** Loads the Responses parser only from the verified, exact Pi 0.82.1 package graph. */
+export async function loadInstalledPiResponsesShared(
+  importModule: PiResponsesModuleImporter = (specifier) => import(specifier),
+): Promise<PiResponsesSharedModule> {
   const installed = loadInstalledPi();
-  const modulePath = join(installed.piAiRoot, "dist", "api", "openai-responses-shared.js");
-  const loaded = await import(pathToFileURL(modulePath).href) as Partial<PiResponsesSharedModule>;
+  const loaded = await importModule(pathToFileURL(installed.responsesSharedPath).href) as Partial<PiResponsesSharedModule>;
   if (typeof loaded.processResponsesStream !== "function") throw new Error("installed Pi Responses parser is unavailable");
   return Object.freeze({ processResponsesStream: loaded.processResponsesStream });
 }
@@ -178,14 +189,15 @@ export function productionAdapterFactory(installed: InstalledPi, privateRoot: Pr
   return async () => new PiSdkCaptureAdapter(installed, privateRoot, repositoryRoot);
 }
 
-/** Pure, read-only v1 configuration for one bounded production capture call. */
+/**
+ * PR6 intentionally ships no approved successor artifact or public runtime
+ * injection route. Fail before the SDK/provider is constructed; PR7 owns any
+ * future internal distribution path.
+ */
 export function productionExtensionOptions(call: Pick<PlannedCall, "extensionMode" | "ordinal">, telemetryDirectory: string): ExtensionOptions {
-  const config: EffortRouterConfig = {
-    enabled: true, mode: call.extensionMode, ambiguousEffort: "high", failureEffort: "xhigh",
-    telemetry: { enabled: true, includePromptText: false, directory: telemetryDirectory },
-    ui: { showStatus: false, notifyOnEscalation: false },
-  };
-  return { telemetryDirectory, sessionId: `live-${call.ordinal}`, load: async () => config };
+  void call;
+  void telemetryDirectory;
+  throw new Error("profile-bound live qualification is unavailable");
 }
 
 /** Client-side abort guard; it never changes a provider payload. */
@@ -224,7 +236,7 @@ class PiSdkCaptureAdapter implements CaptureAdapter {
   constructor(installed: InstalledPi, privateRoot: PrivateRoot, repositoryRoot: string) {
     this.installed = installed; this.privateRoot = privateRoot; this.repositoryRoot = realpathSync(repositoryRoot);
   }
-  estimate(call: PlannedCall, task: PrivateTask): UsageMetrics {
+  estimate(call: PlannedCall, task: PrivateTask): MeasuredUsage {
     const conservativeInput = Buffer.byteLength(task.body) + Buffer.byteLength(evaluationSystemPromptForCall(call));
     return { inputTokens: conservativeInput, uncachedInputTokens: conservativeInput, outputTokens: 0, reasoningTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
   }
@@ -269,7 +281,7 @@ class PiSdkCaptureAdapter implements CaptureAdapter {
       await loader.reload({ resolveProjectTrust: async () => false });
       const sessionId = sessionIdForCall(call);
       const sessionManager = sdk.SessionManager.inMemory(this.privateRoot.path, { id: sessionId });
-      const created = await sdk.createAgentSession({ cwd: this.privateRoot.path, agentDir: join(this.privateRoot.path, "agent"), modelRuntime, model, thinkingLevel: "high", noTools: "all", tools: [], customTools: [], resourceLoader: loader, sessionManager, settingsManager: settings });
+      const created = await sdk.createAgentSession({ cwd: this.privateRoot.path, agentDir: join(this.privateRoot.path, "agent"), modelRuntime, model, noTools: "all", tools: [], customTools: [], resourceLoader: loader, sessionManager, settingsManager: settings });
       const session = created.session;
       if (session.sessionFile !== undefined || session.getActiveToolNames().length !== 0) throw new Error("isolated no-session/no-tools contract failed");
       const abortGuard = new CaptureAbortGuard(() => session.abort());
@@ -359,34 +371,43 @@ interface AgentSession {
 }
 interface AssistantMessage { role: string; stopReason?: string; content: Array<{ type: string; text?: string }>; usage: { input: number; output: number; cacheRead: number; cacheWrite: number; reasoning?: number } }
 
-function resolveInstalledExecutable(): { readonly executablePath: string; readonly packageRoot: string; readonly cliPath: string } {
+function resolveInstalledPiGraph(): StrictPiGraph {
   for (const directory of (process.env.PATH ?? "").split(delimiter)) {
     if (!directory) continue;
     const candidate = join(directory, "pi");
-    let info;
-    try { info = statSync(candidate); } catch { continue; }
-    if (!info.isFile() || (info.mode & 0o111) === 0) continue;
+    try { const info = statSync(candidate); if (!info.isFile() || (info.mode & 0o111) === 0) continue; } catch { continue; }
     if (basename(directory) === ".bin" && basename(dirname(directory)) === "node_modules") {
-      const packageRoot = realpathSync(join(dirname(directory), piPackageName));
-      const cliPath = realpathSync(join(packageRoot, "dist", "cli.js"));
-      requireExecutableFile(cliPath);
-      return Object.freeze({ executablePath: cliPath, packageRoot, cliPath });
+      const graphRoot = dirname(directory);
+      return resolveStrictPiGraph({
+        graphRoot,
+        codingAgentRoot: join(graphRoot, piCodingAgentPackageName),
+      });
     }
-    const cliPath = realpathSync(candidate);
-    requireExecutableFile(cliPath);
-    return Object.freeze({ executablePath: candidate, packageRoot: dirname(dirname(cliPath)), cliPath });
+    const cliPath = realpathSync(candidate); requireExecutableFile(cliPath);
+    const packageRoot = dirname(dirname(cliPath));
+    const scopeRoot = dirname(packageRoot);
+    if (
+      basename(cliPath) !== "cli.js" ||
+      basename(dirname(cliPath)) !== "dist" ||
+      basename(packageRoot) !== "pi-coding-agent" ||
+      basename(scopeRoot) !== "@earendil-works"
+    ) {
+      throw new Error("unsupported installed Pi executable layout");
+    }
+    return resolveStrictPiGraph({
+      graphRoot: dirname(scopeRoot),
+      codingAgentRoot: packageRoot,
+    });
   }
   throw new Error("installed Pi executable was not found");
 }
-function requireExecutableFile(path: string): void {
-  const info = statSync(path);
-  if (!info.isFile() || (info.mode & 0o111) === 0) throw new Error("installed Pi CLI is not an executable regular file");
-}
+function requireExecutableFile(path: string): void { const info = lstatSync(path); if (info.isSymbolicLink() || !info.isFile() || (info.mode & 0o111) === 0) throw new Error("installed Pi CLI is not an executable regular file"); }
 function readSelectedEffort(directory: string): AutomaticEffort {
   const lines = readFileSync(join(directory, "decisions.jsonl"), "utf8").trim().split("\n");
   const row = JSON.parse(lines.at(-1) ?? "{}") as Record<string, unknown>;
-  if (!["low", "medium", "high", "xhigh"].includes(String(row.recommendedEffort))) throw new Error("production extension did not emit a selected effort");
-  return row.recommendedEffort as AutomaticEffort;
+  const profile = record(row.profile); const resolved = record(profile.resolved); const providerValue = resolved.providerValue;
+  if (!["low", "medium", "high", "xhigh"].includes(String(providerValue))) throw new Error("production extension did not emit an exact profile provider value");
+  return providerValue as AutomaticEffort;
 }
 function observerFactory(register: (pi: ExtensionApi) => void): ExtensionFactory { return (pi) => register(pi); }
 function patchEffortOnly(payload: unknown, effort: AutomaticEffort): unknown {
@@ -402,29 +423,6 @@ function cloneJson(value: unknown): unknown {
   return JSON.parse(serialized) as unknown;
 }
 function record(value: unknown): Record<string, unknown> { if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("provider payload is not an object"); return value as Record<string, unknown>; }
-function digestFile(path: string): string { return createHash("sha256").update(readFileSync(path)).digest("hex"); }
-function installedPackageFingerprint(root: string, piAiRoot: string, piAgentCoreRoot: string): string {
-  return sha256(JSON.stringify(piRuntimeManifest.map((file) => {
-    const piAiPrefix = "node_modules/@earendil-works/pi-ai/";
-    const piAgentCorePrefix = "node_modules/@earendil-works/pi-agent-core/";
-    const path = file.startsWith(piAiPrefix) ? join(piAiRoot, file.slice(piAiPrefix.length))
-      : file.startsWith(piAgentCorePrefix) ? join(piAgentCoreRoot, file.slice(piAgentCorePrefix.length))
-        : join(root, file);
-    return { file, sha256: digestFile(path) };
-  })));
-}
-function resolveInstalledDependency(packageRoot: string, name: string): string {
-  const scopedName = name.split("/").at(-1);
-  if (!scopedName) throw new Error("invalid installed Pi dependency");
-  for (const candidate of [join(packageRoot, "node_modules", name), join(dirname(packageRoot), scopedName)]) {
-    try { return realpathSync(candidate); } catch { /* continue */ }
-  }
-  throw new Error(`installed Pi dependency is unavailable: ${name}`);
-}
-function validateInstalledPackage(root: string, name: string): void {
-  const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as Record<string, unknown>;
-  if (pkg.name !== name || pkg.version !== piVersion) throw new Error(`unsupported installed Pi dependency: ${name}`);
-}
 function readOwnedNoFollow(path: string, ownerUid: number, maxBytes: number): { readonly bytes: Buffer; readonly realPath: string } {
   if (typeof constants.O_NOFOLLOW !== "number") throw new Error("private no-follow reads are unavailable");
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);

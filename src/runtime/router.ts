@@ -1,103 +1,338 @@
 import { createHash } from "node:crypto";
-import { higherEffort, isAutomaticEffort, type AutomaticEffort, type Effort } from "../domain/effort.js";
-import type { RoutingDecision } from "../domain/routing-decision.js";
+import {
+  isTrustedProfileActivationSnapshot,
+  sameProfileBinding,
+  sameProfileMatch,
+  type ProfileActivationSnapshot,
+  type ProfileBinding,
+  type InitialAdmissionKey,
+  type ResolvedRung,
+  type RungSelector,
+} from "../domain/profile.js";
 import type { EffortRouterConfig } from "../config/schema.js";
+import type { RoutingDecision } from "../domain/routing-decision.js";
 import type { SessionRuntime } from "../domain/runtime-state.js";
 import type { TaskEpoch } from "../domain/task-epoch.js";
 import { classify } from "../policy/classifier.js";
 import { extractFeatures, type FeatureInput } from "../policy/features.js";
 
-export interface RouterOptions { now?: () => number; id?: () => string; resumeReason?: "resume" | "fork" | "reload" | "startup" | string; config?: Pick<EffortRouterConfig, "mode" | "ambiguousEffort" | "failureEffort" | "ui"> }
+export interface RouterOptions {
+  now?: () => number;
+  id?: () => string;
+  resumeReason?: string;
+  config?: Pick<EffortRouterConfig, "mode" | "ui">;
+}
 export interface StartInput extends FeatureInput {}
 
-const automaticFloor = (epoch: TaskEpoch): AutomaticEffort => {
-  let floor: Effort = epoch.initialEffort;
-  if (epoch.inheritedFloor) floor = higherEffort(floor, epoch.inheritedFloor);
-  if (epoch.escalationFloor) floor = higherEffort(floor, epoch.escalationFloor);
-  return floor as AutomaticEffort;
-};
-const promptHash = (prompt: string) => createHash("sha256").update(prompt).digest("hex");
+type ActiveProfile = Extract<ProfileActivationSnapshot, { status: "ready" }>;
 
-/** In-memory task epoch state. It neither mutates input nor persists routing data. */
+const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+const higher = (left: ResolvedRung, right: ResolvedRung): ResolvedRung => left.ordinal >= right.ordinal ? left : right;
+const sameBinding = sameProfileBinding;
+
+/** Session-local policy state. A request is eligible only while its exact activation remains current. */
 export class EpochRouter {
   readonly runtime: SessionRuntime;
   private readonly now: () => number;
   private readonly nextId: () => string;
   private counter = 0;
-  private lastDecision?: RoutingDecision;
   private queuedInput?: StartInput;
-  private readonly config: RouterOptions["config"];
+  private lastDecision?: RoutingDecision;
+  private active?: ActiveProfile;
+  private activationGeneration = 0;
 
   constructor(options: RouterOptions = {}) {
     this.now = options.now ?? Date.now;
     this.nextId = options.id ?? (() => `epoch-${++this.counter}`);
-    this.config = options.config;
-    this.runtime = { mode: options.config?.mode ?? "shadow", pendingRequests: [], resumeGuard: false, sessionStartedAt: this.now() };
+    this.runtime = {
+      mode: options.config?.mode ?? "shadow",
+      pendingRequests: [],
+      resumeGuard: false,
+      sessionStartedAt: this.now(),
+    };
     this.setResumeReason(options.resumeReason);
   }
 
-  start(input: StartInput): RoutingDecision {
+  /** Activate an already validated detached snapshot without per-hook digest work. */
+  activateSnapshot(match: ProfileBinding["match"], snapshot: ProfileActivationSnapshot, options: { preserveQueuedInput?: boolean } = {}): boolean {
+    if (!isTrustedProfileActivationSnapshot(snapshot) || snapshot.status !== "ready" || !sameProfileMatch(match, snapshot.binding.match)) {
+      this.invalidate();
+      return false;
+    }
+    if (this.active && !sameBinding(this.active.binding, snapshot.binding)) this.clearActivation(options);
+    this.active = snapshot;
+    return true;
+  }
+
+  get generation(): number { return this.activationGeneration; }
+
+  /** A candidate, mismatch, or unresolved identity revokes every decision and transient correlation. */
+  invalidate(options: { preserveQueuedInput?: boolean } = {}): void {
+    if (this.active || this.runtime.currentEpoch || this.runtime.previousEpoch || this.queuedInput || this.runtime.pendingInput
+      || this.runtime.pendingRequests.length > 0 || this.lastDecision || this.runtime.manualOverride) {
+      this.clearActivation(options);
+    }
+  }
+
+  private clearActivation(options: { preserveQueuedInput?: boolean } = {}): void {
+    const queued = options.preserveQueuedInput ? this.queuedInput : undefined;
+    const pending = options.preserveQueuedInput ? this.runtime.pendingInput : undefined;
+    if (this.runtime.currentEpoch) this.runtime.currentEpoch.status = "retired";
+    delete this.active;
+    delete this.runtime.currentEpoch;
+    delete this.runtime.previousEpoch;
+    delete this.runtime.manualOverride;
+    delete this.lastDecision;
+    if (queued) this.queuedInput = queued; else delete this.queuedInput;
+    if (pending) this.runtime.pendingInput = pending; else delete this.runtime.pendingInput;
+    this.runtime.pendingRequests.length = 0;
+    this.activationGeneration += 1;
+  }
+
+  /** Provider adapter material exists only after an active decision under the exact active binding. */
+  providerInput(): {
+    readonly boundSelection: unknown;
+  } | undefined {
+    const epoch = this.runtime.currentEpoch;
+    const rung = this.effectiveRung(epoch);
+    if (!this.active || !epoch || epoch.status !== "active" || !rung || !this.lastDecision
+      || this.lastDecision.epochId !== epoch.id
+      || !sameBinding(rung.binding, this.active.binding)
+      || !sameBinding(this.lastDecision.selectedRung.binding, this.active.binding)) return undefined;
+    const boundSelection = Object.hasOwn(this.active.routing.provider, rung.rungId)
+      ? this.active.routing.provider[rung.rungId]
+      : undefined;
+    return boundSelection ? { boundSelection } : undefined;
+  }
+
+  /** A shadow baseline is retained only when it is a profile-issued provider value. */
+  isKnownProviderEffort(value: unknown): value is string {
+    if (!this.active || typeof value !== "string") return false;
+    return Object.values(this.active.routing.provider).some((selection) => selection?.effort === value);
+  }
+
+  /** Immutable activation data for observation only; no profile parsing or recomputation. */
+  observation(): { readonly binding: ProfileBinding; readonly capabilitySource: ActiveProfile["capability"]["source"]; readonly admissionSource: ActiveProfile["admission"]["source"]; readonly selected?: ResolvedRung; readonly selector?: RungSelector; readonly effective?: ResolvedRung; readonly manual?: ResolvedRung; readonly escalation?: { readonly rung: ResolvedRung; readonly selector: RungSelector } } | undefined {
+    if (!this.active) return undefined;
+    const epoch = this.runtime.currentEpoch;
+    const effective = this.effectiveRung(epoch);
+    return Object.freeze({ binding: this.active.binding, capabilitySource: this.active.capability.source, admissionSource: this.active.admission.source, ...(this.lastDecision ? { selected: this.lastDecision.selectedRung, selector: this.lastDecision.selector } : {}), ...(effective === undefined ? {} : { effective }), ...(this.runtime.manualOverride ? { manual: this.runtime.manualOverride.rung } : {}), ...(epoch?.escalationFloor && epoch.escalationSelector ? { escalation: { rung: epoch.escalationFloor, selector: epoch.escalationSelector } } : {}) });
+  }
+
+  start(input: StartInput): RoutingDecision | undefined {
+    if (!this.active) return undefined;
     const features = extractFeatures(input);
     const current = this.runtime.currentEpoch;
-    const previous = current ?? this.runtime.previousEpoch;
-    const currentActive = current?.status === "active";
-    const previousFailed = current?.status === "failed" || this.runtime.previousEpoch?.status === "failed";
-    // After settlement, only positive back-reference/retry/streaming evidence
-    // retains the prior epoch. A complete standalone goal is independent.
-    const continuationEvidence = features.continuationSignal === true || features.streamingContinuation === true;
-    const standaloneGoal = !continuationEvidence && (features.explicitNewTask === true || features.simpleQuestion === true || features.boundedRead === true || features.codeChange === true || features.testsRequested === true || features.longRunningGoal === true || features.multiStage === true || features.highRisk === true);
-    const relation: RoutingDecision["relation"] = currentActive || continuationEvidence
+    const continuation = features.continuationSignal === true || features.streamingContinuation === true;
+    const standalone = !continuation && (
+      features.explicitNewTask === true || features.simpleQuestion === true || features.boundedRead === true
+      || features.codeChange === true || features.testsRequested === true || features.longRunningGoal === true
+      || features.multiStage === true || features.highRisk === true
+    );
+    const relation: RoutingDecision["relation"] = current?.status === "active" || continuation
       ? "continuation"
-      : standaloneGoal ? "new"
-      : (current?.status === "settled" || current?.status === "failed" || previous !== undefined || this.runtime.resumeGuard) ? "ambiguous" : "new";
-    const classified = classify({ features, relation, previousFailed: relation === "continuation" && previousFailed === true, resumeGuard: this.runtime.resumeGuard });
-    if (relation === "ambiguous" && this.config?.ambiguousEffort) classified.effort = higherEffort(classified.effort, this.config.ambiguousEffort) as AutomaticEffort;
-    const inherited = relation === "new" ? undefined : current ? automaticFloor(current) : previous?.taskClass ? this.lastDecision?.selectedEffort : undefined;
-    if (relation === "new" && current?.status === "settled") this.retireCurrent();
-    const epoch = relation === "continuation" && current ? current : this.createEpoch(classified.effort, classified.taskClass, input.prompt, inherited);
-    if (relation !== "continuation" || !current) this.runtime.currentEpoch = epoch;
+      : standalone ? "new" : (current || this.runtime.previousEpoch || this.runtime.resumeGuard) ? "ambiguous" : "new";
+    const predecessor = current?.status === "active" ? undefined : this.runtime.previousEpoch;
+    const previousFailed = relation === "continuation" && (current?.status === "failed" || predecessor?.status === "failed");
+    const classified = classify({ features, relation, previousFailed, resumeGuard: this.runtime.resumeGuard });
+    const initial = this.resolveInitial(classified.taskClass, relation);
+    if (!initial) return undefined;
+
+    let epoch: TaskEpoch;
+    if (relation === "continuation" && current?.status === "active" && sameBinding(current.initialRung.binding, initial.rung.binding)) {
+      epoch = current;
+      this.raise(epoch, initial.rung, initial.selector);
+      if (previousFailed) this.escalate(epoch, "failedContinuation");
+    } else {
+      if (current?.status === "active" && !sameBinding(current.initialRung.binding, initial.rung.binding)) current.status = "retired";
+      epoch = this.createEpoch(initial.rung, initial.selector, classified.taskClass, input.prompt);
+      if (relation === "ambiguous" && predecessor?.status === "settled" && sameBinding(predecessor.effectiveRung.binding, initial.rung.binding)) {
+        epoch.inheritedFloor = predecessor.effectiveRung;
+      }
+      this.runtime.currentEpoch = epoch;
+      if (previousFailed) this.escalate(epoch, "failedContinuation");
+    }
     epoch.status = "active";
-    // A continuation may contribute new hard-floor evidence (for example a
-    // failed prior run); apply it to this epoch rather than replacing history.
-    if (relation === "continuation") this.raiseEpoch(epoch, classified.effort);
     epoch.lastActivityAt = this.now();
-    const selectedEffort = automaticFloor(epoch);
-    const effectiveFloor = this.effectiveEffort(epoch);
-    const decision: RoutingDecision = { id: this.nextId(), policyVersion: "1.0", epochId: epoch.id, relation, taskClass: classified.taskClass, selectedEffort, effectiveFloor, confidence: classified.confidence, reasons: [...classified.reasons, ...(inherited ? ["PREVIOUS_EPOCH_ACTIVE" as const] : [])], features, timestamp: this.now() };
+    this.runtime.resumeGuard = false;
+    const automatic = this.automaticFloor(epoch);
+    if (!automatic) return undefined;
+    const decision: RoutingDecision = {
+      id: this.nextId(),
+      policyVersion: "1.0",
+      epochId: epoch.id,
+      relation,
+      taskClass: classified.taskClass,
+      selector: initial.selector,
+      selectedRung: automatic,
+      effectiveFloor: this.effectiveRung(epoch) ?? automatic,
+      confidence: classified.confidence === "high" ? "strong" : classified.confidence === "medium" ? "moderate" : "weak",
+      reasons: classified.reasons,
+      features,
+      timestamp: this.now(),
+    };
     epoch.decisionIds.push(decision.id);
     this.lastDecision = decision;
-    this.runtime.resumeGuard = false;
     return decision;
   }
 
-  /** Holds one unmodified input only until before_agent_start consumes it. */
-  queueInput(input: StartInput): void { this.queuedInput = input; }
-  startQueued(): RoutingDecision | undefined { const input = this.queuedInput; delete this.queuedInput; return input ? this.start(input) : undefined; }
-  /** Session lifecycle input; this is in-memory and never enters model history. */
-  setResumeReason(reason: string | undefined): void { this.runtime.resumeGuard = ["resume", "fork", "reload", "startup"].includes(reason ?? ""); }
+  queueInput(input: StartInput): void {
+    this.queuedInput = input;
+    this.runtime.pendingInput = { id: this.nextId(), receivedAt: this.now() };
+  }
 
-  onProviderRequest(): Effort | undefined { const epoch = this.runtime.currentEpoch; if (!epoch) return undefined; epoch.requestCount += 1; return this.effectiveEffort(epoch); }
-  onToolCall(toolName: string): void { const epoch = this.runtime.currentEpoch; if (!epoch) return; epoch.toolCallCount += 1; if (toolName === "edit" || toolName === "write") this.raise("high"); }
-  onToolError(): void { const epoch = this.runtime.currentEpoch; if (!epoch) return; epoch.toolErrorCount += 1; this.raise(higherEffort(epoch.toolErrorCount >= 2 ? "xhigh" : "high", this.config?.failureEffort ?? "low") as AutomaticEffort); }
-  onProviderEnd(stopReason: string | undefined): void { if (stopReason === "error" || stopReason === "length") { const epoch = this.runtime.currentEpoch; if (epoch) epoch.providerErrorCount += 1; this.raise(higherEffort("xhigh", this.config?.failureEffort ?? "low") as AutomaticEffort); } }
-  onCompaction(reason: string, willRetry: boolean): void { if (reason === "overflow" && willRetry) this.raise("xhigh"); }
-  settle(failed = false): void { const epoch = this.runtime.currentEpoch; if (!epoch) return; epoch.status = failed ? "failed" : "settled"; epoch.lastActivityAt = this.now(); this.runtime.previousEpoch = { id: epoch.id, status: epoch.status, taskClass: epoch.taskClass, lastActivityAt: epoch.lastActivityAt }; }
-  setManualOverride(effort: Effort | undefined): void { if (effort) this.runtime.manualOverride = { effort, scope: "session" }; else delete this.runtime.manualOverride; }
-  effectiveEffort(epoch = this.runtime.currentEpoch): Effort { if (!epoch) return this.runtime.manualOverride?.effort ?? "high"; return this.runtime.manualOverride ? higherEffort(automaticFloor(epoch), this.runtime.manualOverride.effort) : automaticFloor(epoch); }
-  status(): string { const epoch = this.runtime.currentEpoch; return `effort:${this.runtime.manualOverride ? this.runtime.manualOverride.effort : "auto"} → ${this.effectiveEffort()}\nepoch:${epoch?.id ?? "none"} ${epoch?.status ?? "none"}\nreason:${this.lastDecision?.reasons[0] ?? "none"}\nmode:${this.runtime.mode}`; }
+  /** `before_agent_start.prompt` is canonical, while input metadata survives expansion. */
+  replaceQueuedPrompt(prompt: string): boolean {
+    if (!this.queuedInput) return false;
+    this.queuedInput = { ...this.queuedInput, prompt };
+    return true;
+  }
 
-  private createEpoch(initialEffort: AutomaticEffort, taskClass: TaskEpoch["taskClass"], prompt: string, inheritedFloor?: AutomaticEffort): TaskEpoch { const now = this.now(); return { id: this.nextId(), createdAt: now, lastActivityAt: now, status: "active", taskClass, initialEffort, ...(inheritedFloor ? { inheritedFloor } : {}), requestCount: 0, toolCallCount: 0, toolErrorCount: 0, providerErrorCount: 0, lastPromptHash: promptHash(prompt), decisionIds: [] }; }
-  private retireCurrent(): void { const epoch = this.runtime.currentEpoch; if (epoch) epoch.status = "retired"; }
-  private raise(floor: AutomaticEffort): void { const epoch = this.runtime.currentEpoch; if (epoch) this.raiseEpoch(epoch, floor); }
-  private raiseEpoch(epoch: TaskEpoch, floor: AutomaticEffort): void { epoch.escalationFloor = epoch.escalationFloor ? higherEffort(epoch.escalationFloor, floor) as AutomaticEffort : floor; }
+  startQueued(): RoutingDecision | undefined {
+    const input = this.queuedInput;
+    delete this.queuedInput;
+    delete this.runtime.pendingInput;
+    return input ? this.start(input) : undefined;
+  }
+
+  setResumeReason(reason: string | undefined): void {
+    this.runtime.resumeGuard = ["resume", "fork", "reload", "startup"].includes(reason ?? "");
+  }
+
+  onProviderRequest(): ResolvedRung | undefined {
+    const epoch = this.runtime.currentEpoch;
+    if (!epoch || !this.providerInput()) return undefined;
+    epoch.requestCount += 1;
+    return this.effectiveRung(epoch);
+  }
+
+  onToolCall(_toolName: string): void {
+    const epoch = this.runtime.currentEpoch;
+    if (epoch?.status === "active") epoch.toolCallCount += 1;
+  }
+
+  onToolError(): void {
+    const epoch = this.runtime.currentEpoch;
+    if (!epoch || epoch.status !== "active") return;
+    epoch.toolErrorCount += 1;
+    this.escalate(epoch, epoch.toolErrorCount === 1 ? "firstToolError" : "repeatedToolError");
+  }
+
+  onProviderEnd(stopReason: string | undefined): void {
+    const epoch = this.runtime.currentEpoch;
+    if (!epoch || epoch.status !== "active") return;
+    if (stopReason === "error") { epoch.providerErrorCount += 1; this.escalate(epoch, "providerError"); }
+    if (stopReason === "length") { epoch.providerErrorCount += 1; this.escalate(epoch, "lengthExhaustion"); }
+  }
+
+  onCompaction(reason: string, willRetry: boolean): void {
+    const epoch = this.runtime.currentEpoch;
+    if (epoch?.status === "active" && reason === "overflow" && willRetry) this.escalate(epoch, "overflowRetry");
+  }
+
+  settle(failed = false): void {
+    const epoch = this.runtime.currentEpoch;
+    const effective = this.effectiveRung(epoch);
+    if (!epoch || !effective) return;
+    epoch.status = failed ? "failed" : "settled";
+    epoch.lastActivityAt = this.now();
+    this.runtime.previousEpoch = {
+      id: epoch.id,
+      status: epoch.status,
+      taskClass: epoch.taskClass,
+      lastActivityAt: epoch.lastActivityAt,
+      effectiveRung: effective,
+    };
+  }
+
+  /** Only exact, unique profile-local IDs/aliases may select an optional explicit ceiling. */
+  setManualOverride(name: string | undefined): boolean {
+    if (!name) {
+      const epoch = this.runtime.currentEpoch;
+      const effective = this.effectiveRung(epoch);
+      if (epoch?.status === "active" && effective) this.raise(epoch, effective);
+      delete this.runtime.manualOverride;
+      return true;
+    }
+    if (!this.active) return false;
+    if (name === "prototype" || Object.hasOwn(Object.prototype, name)) return false;
+    const rung = Object.hasOwn(this.active.routing.manual, name) ? this.active.routing.manual[name] : undefined;
+    if (!rung) return false;
+    const epoch = this.runtime.currentEpoch;
+    const effective = this.effectiveRung(epoch);
+    if (epoch?.status === "active" && effective && sameBinding(effective.binding, rung.binding) && rung.ordinal < effective.ordinal) {
+      this.raise(epoch, effective);
+    }
+    this.runtime.manualOverride = {
+      rung,
+      scope: "session",
+    };
+    return true;
+  }
+
+  effectiveRung(epoch = this.runtime.currentEpoch): ResolvedRung | undefined {
+    const automatic = epoch && this.automaticFloor(epoch);
+    const manual = this.runtime.manualOverride?.rung;
+    if (!automatic) return undefined;
+    return manual && sameBinding(manual.binding, automatic.binding) ? higher(automatic, manual) : automatic;
+  }
+
+  status(): string {
+    const epoch = this.runtime.currentEpoch;
+    const rung = this.effectiveRung(epoch);
+    return `profile:${this.active ? `${this.active.binding.capability.profileId}@${this.active.binding.capability.profileRevision}` : "unresolved"}`
+      + `\nrung:${this.runtime.manualOverride?.rung.rungId ?? "auto"} → ${rung?.rungId ?? "baseline"}`
+      + `\nepoch:${epoch?.id ?? "none"} ${epoch?.status ?? "none"}`
+      + `\nreason:${this.lastDecision?.reasons[0] ?? "none"}`
+      + `\nmode:${this.runtime.mode}`;
+  }
+
+  private resolveInitial(taskClass: TaskEpoch["taskClass"], relation: RoutingDecision["relation"]): ActiveProfile["routing"]["initial"][InitialAdmissionKey] | undefined {
+    if (!this.active) return undefined;
+    const key = relation !== "new" ? "continuation"
+      : taskClass === "simple_query" ? "simpleQuery"
+      : taskClass === "bounded_read" ? "boundedRead"
+      : taskClass === "implementation" ? "implementation"
+      : taskClass === "debugging" ? "debugging"
+      : taskClass === "architecture" ? "architecture"
+      : taskClass === "high_risk" ? "highRisk" : "unknown";
+    return this.active.routing.initial[key];
+  }
+
+  private createEpoch(initialRung: ResolvedRung, initialSelector: RungSelector, taskClass: TaskEpoch["taskClass"], prompt: string): TaskEpoch {
+    const now = this.now();
+    return { id: this.nextId(), createdAt: now, lastActivityAt: now, status: "active", taskClass, initialRung, initialSelector, requestCount: 0, toolCallCount: 0, toolErrorCount: 0, providerErrorCount: 0, lastPromptHash: hash(prompt), decisionIds: [] };
+  }
+
+  private automaticFloor(epoch: TaskEpoch): ResolvedRung {
+    let floor = epoch.initialRung;
+    if (epoch.inheritedFloor && sameBinding(epoch.inheritedFloor.binding, floor.binding)) floor = higher(floor, epoch.inheritedFloor);
+    if (epoch.escalationFloor && sameBinding(epoch.escalationFloor.binding, floor.binding)) floor = higher(floor, epoch.escalationFloor);
+    return floor;
+  }
+
+  private raise(epoch: TaskEpoch, rung: ResolvedRung, selector?: RungSelector): void {
+    if (!sameBinding(epoch.initialRung.binding, rung.binding)) return;
+    epoch.escalationFloor = epoch.escalationFloor ? higher(epoch.escalationFloor, rung) : rung;
+    if (selector && epoch.escalationFloor === rung) epoch.escalationSelector = selector;
+  }
+
+  private escalate(epoch: TaskEpoch, key: keyof ActiveProfile["routing"]["evidence"]): void {
+    if (!this.active || !sameBinding(epoch.initialRung.binding, this.active.binding)) return;
+    const route = this.active.routing.evidence[key];
+    this.raise(epoch, route.rung, route.selector);
+  }
 }
 
 export function parseEffortCommand(input: string, router: EpochRouter): boolean {
-  const match = /^\/effort\s+(status|auto|low|medium|high|xhigh|max|shadow|enforce)\s*$/.exec(input);
+  const match = /^\/effort\s+([^\s]+)\s*$/.exec(input);
   if (!match) return false;
-  const command = match[1];
-  if (command === "auto") router.setManualOverride(undefined);
-  else if (command === "shadow" || command === "enforce") router.runtime.mode = command;
-  else if (command !== "status" && isAutomaticEffort(command as Effort) || command === "max") router.setManualOverride(command as Effort);
-  return true;
+  const command = match[1]!;
+  if (command === "status") return true;
+  if (command === "auto") return router.setManualOverride(undefined);
+  if (command === "shadow") { router.runtime.mode = "shadow"; return true; }
+  // The production extension owns qualification; router-only callers cannot
+  // accidentally turn an unqualified profile into an enforced one.
+  if (command === "enforce") return false;
+  return router.setManualOverride(command);
 }

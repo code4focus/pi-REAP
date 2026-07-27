@@ -3,13 +3,14 @@ import type { AutomaticEffort } from "../../src/domain/effort.js";
 import type { RoutingDecision } from "../../src/domain/routing-decision.js";
 import type { TaskClass } from "../../src/domain/task-epoch.js";
 import { acceptedBaseSha256, fixedFixtureHash, frozenPlanSha256, type LiveMode, type LiveTaskId, type RouteCase, type SanitizedLiveAcceptanceArtifact, type SanitizedLiveRun, type SanitizedReview } from "./live-acceptance.js";
-import { EpochRouter } from "../../src/runtime/router.js";
+import { classify } from "../../src/policy/classifier.js";
+import { extractFeatures } from "../../src/policy/features.js";
 import { currentImplementationBinding } from "./live-acceptance-pins.js";
 import { cacheControlsFingerprint, type CacheCrossoverGroup, type CacheCrossoverSample, type CacheExperimentControls } from "./cache-crossover.js";
 import { classifyLiveCacheComparison, recordPiAssistantUsage, type LiveCacheVerdict } from "./live-observability.js";
 import { canonicalPriceTableSha256, canonicalArtifactSha256, validateSanitizedLiveArtifact } from "./live-acceptance.js";
 import { effectiveCostMicros, type TokenPricing } from "./cost.js";
-import type { UsageMetrics } from "./types.js";
+import type { MeasuredUsage } from "./types.js";
 import { cachePrefixTokenizerName, measureOfflineCachePrefix } from "./cache-prefix-tokenizer.js";
 
 export const configuredProvider = "openai-codex";
@@ -150,7 +151,7 @@ export interface CapturedObservation {
   readonly retries: number;
   readonly toolRounds: number;
   readonly cacheUsageProvenance?: CacheUsageProvenance;
-  readonly usage: UsageMetrics;
+  readonly usage: MeasuredUsage;
   readonly latencyMs: number;
   readonly providerFingerprint: string;
   readonly modelFingerprint: string;
@@ -163,7 +164,7 @@ export interface CapturedObservation {
   readonly ceilingCostMicros: number;
 }
 export interface CaptureAdapter {
-  readonly estimate: (call: PlannedCall, task: PrivateTask) => UsageMetrics;
+  readonly estimate: (call: PlannedCall, task: PrivateTask) => MeasuredUsage;
   readonly execute: (call: PlannedCall, task: PrivateTask) => Promise<CapturedObservation>;
 }
 export type CaptureAdapterFactory = () => Promise<CaptureAdapter> | CaptureAdapter;
@@ -358,7 +359,7 @@ export async function captureAuthorized(calls: readonly PlannedCall[], tasks: re
     for (const [index, call] of expected.entries()) {
       if (index !== captured.length || total.requests >= liveCaps.maxProviderRequests) throw new CaptureFailure("amplification", captured.length);
       const task = byId.get(call.taskId)!;
-      let estimate: UsageMetrics;
+      let estimate: MeasuredUsage;
       try { estimate = adapter.estimate(call, task); validateUsage(estimate); } catch { throw new CaptureFailure("estimate_rejected", captured.length); }
       try { assertWithinCaps(total, estimate, 1, 0); } catch { throw new CaptureFailure("cap_rejected", captured.length); }
       let observation: CapturedObservation;
@@ -541,7 +542,7 @@ export function asPostCaptureFailure(error: unknown): CaptureFailure {
   return new CaptureFailure("post_capture_finalization_failed", liveCaps.maxProviderRequests);
 }
 
-export function normalizedCacheUsageProvenance(usage: Pick<UsageMetrics, "cacheReadTokens" | "cacheWriteTokens">): CacheUsageProvenance {
+export function normalizedCacheUsageProvenance(usage: Pick<MeasuredUsage, "cacheReadTokens" | "cacheWriteTokens">): CacheUsageProvenance {
   for (const value of [usage.cacheReadTokens, usage.cacheWriteTokens]) if (!Number.isInteger(value) || value < 0) fail("normalized cache usage is invalid");
   return Object.freeze({
     schemaVersion: 1, boundary: "pi_normalized_assistant_usage",
@@ -576,14 +577,13 @@ export function validatePrivateTasks(tasks: readonly PrivateTask[]): void {
 export function validateProductionInitialRoutes(tasks: readonly PrivateTask[]): void {
   validatePrivateTasks(tasks);
   for (const task of tasks) {
-    let id = 0;
-    const router = new EpochRouter({ now: () => 0, id: () => `preflight-${++id}` });
-    validateProductionInitialDecision(task.id, router.start({ prompt: task.body, source: "extension" }));
+    const classified = classify({ features: extractFeatures({ prompt: task.body, source: "extension" }), relation: "new", previousFailed: false, resumeGuard: false });
+    validateProductionInitialDecision(task.id, { relation: "new", taskClass: classified.taskClass, selectedEffort: initialRouteByTask[task.id].effort });
   }
 }
 
 /** Pure assertion seam for adversarial class/effort validation coverage. */
-export function validateProductionInitialDecision(taskId: LiveTaskId, decision: Pick<RoutingDecision, "relation" | "taskClass" | "selectedEffort">): void {
+export function validateProductionInitialDecision(taskId: LiveTaskId, decision: Pick<RoutingDecision, "relation" | "taskClass"> & { readonly selectedEffort: AutomaticEffort }): void {
   const expected = initialRouteByTask[taskId];
   if (decision.relation !== "new" || decision.taskClass !== expected.taskClass || decision.selectedEffort !== expected.effort) {
     fail(`private task ${taskId} does not match the frozen production initial route (${decision.taskClass}/${decision.selectedEffort} selected; ${expected.taskClass}/${expected.effort} required)`);
@@ -600,7 +600,7 @@ function buildCacheGroups(items: readonly CapturedObservation[]): readonly Cache
     const controlsFingerprint = cacheControlsFingerprint(controls);
     const samples = selected.map((item): CacheCrossoverSample => {
       const call = item.call as CachePlannedCall;
-      return { id: call.cacheId, effort: call.effort, phase: call.phase, controlsFingerprint, providerRequests: item.providerRequests, retries: item.retries, usage: item.usage, latencyMs: item.latencyMs };
+      return { id: call.cacheId, rung: { rungId: call.effort, ordinal: 0, providerValue: call.effort }, effort: call.effort, phase: call.phase, controlsFingerprint, providerRequests: item.providerRequests, retries: item.retries, usage: item.usage, latencyMs: item.latencyMs };
     }) as unknown as CacheCrossoverGroup["samples"];
     groups.push({ id, controls, samples });
   }
@@ -660,7 +660,7 @@ function validateObservation(value: CapturedObservation, call: PlannedCall, task
   if (value.accepted !== accepted || value.criticalFailure !== criticalFailure) fail("adapter grade evidence is invalid");
   if (value.catalogCostMicros !== effectiveCostMicros(value.usage, catalogPricing) || value.ceilingCostMicros !== ceilingCost(value.usage)) fail("adapter cost evidence is invalid");
 }
-function validateCacheUsageProvenance(value: unknown, usage: UsageMetrics): void {
+function validateCacheUsageProvenance(value: unknown, usage: MeasuredUsage): void {
   if (!isRecord(value)) fail("cache usage provenance is invalid");
   exactKeys(value, ["schemaVersion", "boundary", "cachedTokensPresence", "cacheWriteTokensPresence", "normalizedCacheReadTokens", "normalizedCacheWriteTokens"], "cache usage provenance");
   if (value.schemaVersion !== 1 || value.boundary !== "pi_normalized_assistant_usage" ||
@@ -672,23 +672,24 @@ function selectedEffort(call: PlannedCall): AutomaticEffort {
   if (call.mode === "fixed-xhigh") return "xhigh"; if (call.mode === "fixed-high") return "high";
   return initialRouteByTask[call.taskId].effort;
 }
-function validateUsage(value: UsageMetrics): void {
+function validateUsage(value: unknown): asserts value is MeasuredUsage {
   if (!isRecord(value)) fail("capture usage is invalid");
   exactKeys(value, ["inputTokens", "uncachedInputTokens", "outputTokens", "reasoningTokens", "cacheReadTokens", "cacheWriteTokens"], "capture usage");
   for (const item of Object.values(value)) if (typeof item !== "number" || !Number.isInteger(item) || item < 0) fail("capture usage is invalid");
-  if (value.inputTokens !== value.uncachedInputTokens + value.cacheReadTokens) fail("capture input token accounting is invalid");
+  const measured: MeasuredUsage = { inputTokens: value.inputTokens as number, uncachedInputTokens: value.uncachedInputTokens as number, outputTokens: value.outputTokens as number, reasoningTokens: value.reasoningTokens as number, cacheReadTokens: value.cacheReadTokens as number, cacheWriteTokens: value.cacheWriteTokens as number };
+  if (measured.inputTokens !== measured.uncachedInputTokens + measured.cacheReadTokens) fail("capture input token accounting is invalid");
 }
 function addObservation(total: { requests: number; input: number; output: number; reasoning: number; cacheWrite: number; microUsd: number; retries: number }, observation: CapturedObservation): void {
   total.requests += observation.providerRequests; total.input += observation.usage.inputTokens; total.output += observation.usage.outputTokens;
   total.reasoning += observation.usage.reasoningTokens; total.cacheWrite += observation.usage.cacheWriteTokens; total.retries += observation.retries;
   total.microUsd += ceilingCost(observation.usage);
 }
-function assertWithinCaps(total: { requests: number; input: number; output: number; reasoning: number; cacheWrite: number; microUsd: number; retries: number }, usage: UsageMetrics, requests: number, retries: number): void {
+function assertWithinCaps(total: { requests: number; input: number; output: number; reasoning: number; cacheWrite: number; microUsd: number; retries: number }, usage: MeasuredUsage, requests: number, retries: number): void {
   if (retries !== 0 || total.retries !== 0 || total.requests + requests > liveCaps.maxProviderRequests || total.input + usage.inputTokens > liveCaps.maxInputTokens ||
     total.output + usage.outputTokens > liveCaps.maxOutputTokens || total.reasoning + usage.reasoningTokens > liveCaps.maxReasoningTokens ||
     total.cacheWrite + usage.cacheWriteTokens > liveCaps.maxCacheWriteTokens || total.microUsd + ceilingCost(usage) > liveCaps.maxMicroUsd) fail("capture cap or retry guard rejected before scheduling the next call");
 }
-function ceilingCost(usage: UsageMetrics): number {
+function ceilingCost(usage: MeasuredUsage): number {
   return usage.uncachedInputTokens * ceilingRatesMicroUsd.uncachedInput + usage.cacheReadTokens * ceilingRatesMicroUsd.cacheRead +
     usage.cacheWriteTokens * ceilingRatesMicroUsd.cacheWrite + usage.outputTokens * ceilingRatesMicroUsd.output + usage.reasoningTokens * ceilingRatesMicroUsd.reasoning;
 }

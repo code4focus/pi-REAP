@@ -20,6 +20,10 @@ type ParseResult =
   | { valid: true; config: EffortRouterConfig | undefined }
   | { valid: false };
 
+type ReadResult =
+  | { readonly ok: true; readonly source: string | undefined }
+  | { readonly ok: false };
+
 function parseConfig(source: string | undefined): ParseResult {
   if (source === undefined) return { valid: true, config: undefined };
   try {
@@ -34,9 +38,13 @@ function parseConfig(source: string | undefined): ParseResult {
 
 /** Reads only the two effort-router files; invalid input falls back to safe defaults. */
 export async function loadConfig(fs: ReadOnlyConfigFileSystem, paths: ConfigPaths): Promise<EffortRouterConfig> {
-  const [global, project] = await Promise.all([fs.readFile(paths.global), fs.readFile(paths.project)]);
-  const globalResult = parseConfig(global);
-  const projectResult = parseConfig(project);
+  const readSafely = async (path: string): Promise<ReadResult> => {
+    try { return { ok: true, source: await fs.readFile(path) }; } catch { return { ok: false }; }
+  };
+  const [global, project] = await Promise.all([readSafely(paths.global), readSafely(paths.project)]);
+  if (!global.ok || !project.ok) return cloneDefaults();
+  const globalResult = parseConfig(global.source);
+  const projectResult = parseConfig(project.source);
   if (!globalResult.valid || !projectResult.valid) return cloneDefaults();
   return projectResult.config ?? globalResult.config ?? cloneDefaults();
 }
