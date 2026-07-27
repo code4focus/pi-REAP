@@ -20,7 +20,7 @@ export class ExtensionHarness {
     session_start: [], session_shutdown: [], input: [], before_agent_start: [], before_provider_request: [],
     tool_call: [], tool_execution_end: [], message_end: [], session_compact: [], agent_settled: [],
   };
-  readonly context = { model: { provider: "openai", api: "openai-responses", reasoning: true }, ui: { setStatus: (key: string, text: string | undefined) => this.status.set(key, text), notify: (message: string, type?: string) => this.notifications.push({ message, type }) } } as unknown as ExtensionContext;
+  readonly context = { model: { provider: "openai", api: "openai-responses", id: "m", reasoning: true }, ui: { setStatus: (key: string, text: string | undefined) => this.status.set(key, text), notify: (message: string, type?: string) => this.notifications.push({ message, type }) } } as unknown as ExtensionContext;
   on<E extends keyof LifecycleEvents>(event: E, handler: LifecycleHandler<E>): void { this.handlers[event].push(handler); }
   registerCommand(name: string, options: { handler: (args: string, ctx: ExtensionContext) => Promise<void> }): void { this.commands.set(name, options); }
   emit<E extends keyof LifecycleEvents>(name: E, event: LifecycleEvents[E]): unknown { let result: unknown; for (const handler of this.handlers[name]) { const next = handler(event, this.context); if (next !== undefined) result = next; } return result; }
@@ -28,6 +28,7 @@ export class ExtensionHarness {
   start(reason: SessionStartEvent["reason"] = "startup"): void { this.emit("session_start", { type: "session_start", reason } satisfies SessionStartEvent); }
   shutdown(reason: SessionShutdownEvent["reason"] = "new"): void { this.emit("session_shutdown", { type: "session_shutdown", reason } satisfies SessionShutdownEvent); }
   input(text: string, streamingBehavior?: InputEvent["streamingBehavior"]): void { this.emit("input", { type: "input", text, source: "interactive", ...(streamingBehavior ? { streamingBehavior } : {}) } satisfies InputEvent); }
+  setModel(model: { provider?: string; api?: string; id?: string }): void { Object.assign((this.context as { model: object }).model, model); }
   before(prompt: string): void { this.emit("before_agent_start", { type: "before_agent_start", prompt, systemPrompt: "", systemPromptOptions: {} } as BeforeAgentStartEvent); }
   request(payload: unknown): unknown { return this.emit("before_provider_request", { type: "before_provider_request", payload } satisfies BeforeProviderRequestEvent); }
   error(): void { this.emit("tool_execution_end", { type: "tool_execution_end", toolCallId: "synthetic", toolName: "read", result: {}, isError: true } satisfies ToolExecutionEndEvent); }
