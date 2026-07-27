@@ -10,10 +10,12 @@
     "test": "vitest run",
     "eval:build": "tsc -p eval/tsconfig.json",
     "eval:typecheck": "tsc -p eval/tsconfig.json --noEmit",
-    "eval:sample": "vitest run eval/test/sample-report.test.ts"
+    "eval:sample": "vitest run eval/test/sample-report.test.ts",
+    "eval:live:dry-run": "pnpm eval:build && node scripts/live-acceptance-driver.mjs"
   },
   "dependencies": {
-    "@sinclair/typebox": "^0.34.41"
+    "@sinclair/typebox": "^0.34.41",
+    "js-tiktoken": "1.0.21"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "0.82.1",

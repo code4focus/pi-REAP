@@ -41,6 +41,7 @@ export class PiSessionExecutor implements EvaluationExecutor {
     const activation = boundary === "missing-activation" ? undefined : { capability: task.profile.capability, admission: task.profile.admission, modelCatalogRevision: task.boundary?.attestation?.modelCatalogRevision ?? task.profile.capability.match.modelCatalogRevision, modelCatalogDigest: task.boundary?.attestation?.modelCatalogDigest ?? task.profile.capability.match.modelCatalogDigest, piVersion: task.boundary?.attestation?.piVersion ?? task.profile.capability.match.piVersion, providerAdapterRevision: task.boundary?.attestation?.providerAdapterRevision ?? task.profile.capability.match.providerAdapterRevision, providerAdapterDigest: task.boundary?.attestation?.providerAdapterDigest ?? task.profile.capability.match.providerAdapterDigest };
     await createExtension({ ...this.base, load: async () => ({ enabled: true, mode, telemetry: { enabled: true, includePromptText: false, directory }, ui: { showStatus: false, notifyOnEscalation: false } }), ...(activation ? { activation } : {}) })(pi.api()); pi.start();
     if (task.boundary?.model) pi.setModel({ ...(task.boundary.model.model === undefined ? {} : { id: task.boundary.model.model }), ...(task.boundary.model.provider === undefined ? {} : { provider: task.boundary.model.provider }), ...(task.boundary.model.api === undefined ? {} : { api: task.boundary.model.api }) });
+    if (request.mode !== "baseline") await pi.effort("enforce");
     if (request.mode === "manual-diagnostic") await pi.effort(request.requestedRungId ?? "auto"); else await pi.effort("auto");
     const scenario = request.scenario ?? { kind: "initial", admissionCase: "simpleQuery", prompt: "What is JSON?" };
     const payload = () => ({ reasoning: { effort: "baseline" }, cache: { read: 0, write: 0 } });
@@ -70,7 +71,7 @@ export class PiSessionExecutor implements EvaluationExecutor {
     const directory = mkdtempSync(join(process.cwd(), "eval", ".tmp-telemetry-")); const pi = new SyntheticPi();
     const activation = { capability: task.profile.capability, admission: task.profile.admission, modelCatalogRevision: task.profile.capability.match.modelCatalogRevision, modelCatalogDigest: task.profile.capability.match.modelCatalogDigest, piVersion: task.profile.capability.match.piVersion, providerAdapterRevision: task.profile.capability.match.providerAdapterRevision, providerAdapterDigest: task.profile.capability.match.providerAdapterDigest };
     await createExtension({ ...this.base, load: async () => ({ enabled: true, mode: "enforce", telemetry: { enabled: true, includePromptText: false, directory }, ui: { showStatus: false, notifyOnEscalation: false } }), activation })(pi.api());
-    pi.start(); pi.request("Implement a complex synthetic feature.", { reasoning: { effort: "baseline" } }); pi.settle();
+    pi.start(); await pi.effort("enforce"); pi.request("Implement a complex synthetic feature.", { reasoning: { effort: "baseline" } }); pi.settle();
     pi.request("Read this bounded synthetic file.", { reasoning: { effort: "baseline" } }); pi.settle();
     pi.request("continue", { reasoning: { effort: "baseline" } }); pi.fail(); pi.settle("error");
     pi.request("continue", { reasoning: { effort: "baseline" } }); pi.settle();

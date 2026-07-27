@@ -11,6 +11,7 @@ import { EpochRouter, parseEffortCommand } from "./runtime/router.js";
 import { TelemetryRuntime, type Usage } from "./telemetry/runtime.js";
 import { TelemetryWriter } from "./telemetry/writer.js";
 import type { ProfileObservation } from "./telemetry/records.js";
+import { mayProductionSessionEnforce } from "./qualification/enforcement.js";
 
 export type PiExtension = ExtensionFactory;
 
@@ -68,7 +69,7 @@ export const createExtension = (options: ExtensionOptions = {}): PiExtension => 
     if (!match || !activation || !current()) return revoke(ctx);
     const resolved = current()!.activateSnapshot(match, activation.snapshot, { preserveQueuedInput });
     if (!resolved) return revoke(ctx);
-    if (current()!.generation !== generation) { clearTelemetryBoundary("profile_boundary"); lastRunFailed = false; }
+    if (current()!.generation !== generation) { current()!.runtime.mode = "shadow"; clearTelemetryBoundary("profile_boundary"); lastRunFailed = false; }
     return resolved;
   };
   const clearTelemetryBoundary = (reason: "session_boundary" | "profile_boundary" | "settled_boundary") => {
@@ -79,12 +80,18 @@ export const createExtension = (options: ExtensionOptions = {}): PiExtension => 
 
   pi.registerCommand("effort", {
     description: "Set Pi REAP effort for this session only.",
-    handler: async (args, ctx) => { if (current() && parseEffortCommand(`/effort ${args}`, current()!)) status(ctx); },
+    handler: async (args, ctx) => {
+      if (args.trim() === "enforce") {
+        if (current() && mayProductionSessionEnforce(current()!.observation()?.binding)) current()!.runtime.mode = "enforce";
+      } else if (current()) parseEffortCommand(`/effort ${args}`, current()!);
+      status(ctx);
+    },
   });
   pi.on("session_start", (event, ctx) => {
     // A start always replaces all state, including an explicit max override.
     clearTelemetryBoundary("session_boundary"); telemetry = undefined;
-    router = new EpochRouter({ resumeReason: event.reason, config });
+    // Settings never authorize a provider patch; each session begins in shadow.
+    router = new EpochRouter({ resumeReason: event.reason, config: { ...config, mode: "shadow" } });
     reconcile(ctx);
     lastRunFailed = false;
     if (config.telemetry.enabled) { const directory = options.telemetryDirectory ?? config.telemetry.directory; telemetry = new TelemetryRuntime(new TelemetryWriter({ directory: isAbsolute(directory) ? directory : resolve(ctx.cwd, directory), sessionId: `${options.sessionId ?? ctx.sessionManager.getSessionId()}:${options.telemetryNonce?.() ?? randomUUID()}` })); }
@@ -105,6 +112,13 @@ export const createExtension = (options: ExtensionOptions = {}): PiExtension => 
   });
   pi.on("before_provider_request", (event, ctx) => {
     if (!reconcile(ctx)) return undefined;
+    // Qualification is time- and evidence-bound. Revalidate immediately before
+    // every provider patch; an expired or no-longer-exact qualification revokes
+    // the session-local opt-in before the payload is inspected.
+    if (current()?.runtime.mode === "enforce"
+      && !mayProductionSessionEnforce(current()?.observation()?.binding)) {
+      current()!.runtime.mode = "shadow";
+    }
     const resolved = current()?.onProviderRequest();
     const input = current()?.providerInput();
     const epoch = current()?.runtime.currentEpoch;

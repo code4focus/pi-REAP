@@ -1,6 +1,6 @@
 import type { UsageMetrics } from "./types.js";
 
-/** Integer micro-currency rates keep synthetic and real calculations auditable. */
+/** Micro-currency rates may be fractional when a catalog price is below $1/M tokens. */
 export interface TokenPricing { readonly uncachedInputMicrosPerToken: number; readonly outputMicrosPerToken: number; readonly reasoningMicrosPerToken: number; readonly cacheReadMicrosPerToken: number; readonly cacheWriteMicrosPerToken: number }
 export const syntheticTokenPricing: TokenPricing = { uncachedInputMicrosPerToken: 10, outputMicrosPerToken: 30, reasoningMicrosPerToken: 20, cacheReadMicrosPerToken: 2, cacheWriteMicrosPerToken: 12 };
 

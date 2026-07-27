@@ -33,6 +33,6 @@ export interface CorpusManifest {
   readonly schemaVersion: 2;
   readonly name: string;
   readonly sourceSafety: "synthetic fixtures only";
-  readonly stages: Record<Exclude<CorpusMode, "regression">, StageRequirement>;
+  readonly stages: Record<CorpusMode, StageRequirement>;
   readonly tasks: readonly CorpusTask[];
 }

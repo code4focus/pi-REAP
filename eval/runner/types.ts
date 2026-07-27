@@ -15,6 +15,8 @@ export type ArmAlias =
   | { readonly source: "initial"; readonly admissionCase: InitialAdmissionCase; readonly selector: RungSelector; readonly reachable: boolean }
   | { readonly source: "evidence"; readonly trigger: EvidenceTrigger; readonly selector: RungSelector; readonly reachable: true };
 export interface UsageMetrics { readonly inputTokens?: number; readonly uncachedInputTokens?: number; readonly outputTokens?: number; readonly reasoningTokens?: number; readonly cacheReadTokens?: number; readonly cacheWriteTokens?: number; readonly cost?: { readonly input: number; readonly output: number; readonly cacheRead: number; readonly cacheWrite: number; readonly total: number } }
+/** Complete counters required only by bounded live qualification artifacts. */
+export interface MeasuredUsage extends UsageMetrics { readonly inputTokens: number; readonly uncachedInputTokens: number; readonly outputTokens: number; readonly reasoningTokens: number; readonly cacheReadTokens: number; readonly cacheWriteTokens: number }
 export interface ExecutionRequest { readonly mode: EvaluationMode; readonly selector?: RungSelector; readonly requestedRungId?: string; readonly selectorAliases?: readonly RungSelector[]; readonly armAliases?: readonly ArmAlias[]; readonly scenario?: LifecycleScenario }
 
 /** Corpus oracle only; it is deliberately unable to stand in for production evidence. */

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { canonicalProfileDigest } from "../../src/domain/canonical-json.js";
 import { syntheticManifest, profileFixtures } from "../corpus/manifest.js";
 import { gradeDeterministically } from "../graders/deterministic.js";
 import { validateHumanReviewDecisions, type HumanReviewDecision } from "../graders/human.js";
@@ -43,10 +44,10 @@ describe("profile-aware evaluation harness", () => {
     expect(result.observed.profile.capability.id).toBe(task.profile.capability.profileId);
     expect(result.observed.profile.admission.id).toBe(task.profile.admission.profileId);
     expect(result.observed.routing.effective).toEqual({ rungId: "economy", ordinal: 0, providerValue: "minimal" });
-    expect(result.observed.request.patchStatus).toBe("applied");
-    expect(result.observed.request.locallyAppliedProviderValue).toBe("minimal");
+    expect(result.observed.request.patchStatus).toBe("shadow");
+    expect(result.observed.request.locallyAppliedProviderValue).toBeUndefined();
     expect(result.observed.request.key).toMatchObject({ requestIndex: 1 });
-    expect(gradeDeterministically(task, { result })).toMatchObject({ accepted: true, criticalFailure: false });
+    expect(gradeDeterministically(task, { result })).toMatchObject({ accepted: false, criticalFailure: true });
   });
 
   it("keeps fail-closed evidence absent instead of fabricating a baseline rung", async () => {
@@ -105,7 +106,8 @@ describe("profile-aware evaluation harness", () => {
       else expect(trigger).toBe("failedContinuation");
       expect(after.routing.escalation).toEqual({ selector, rung: { rungId: "max-auto", ordinal: 3, providerValue: "xhigh" } });
       expect(after.routing.effective).toEqual({ rungId: "max-auto", ordinal: 3, providerValue: "xhigh" });
-      expect(after.request).toMatchObject({ patchStatus: "applied", locallyAppliedProviderValue: "xhigh" });
+      expect(after.request).toMatchObject({ patchStatus: "shadow" });
+      expect(after.request.locallyAppliedProviderValue).toBeUndefined();
       expect(result.providerRequests).toBe(2); expect(result.toolRounds).toBe(trigger === "repeatedToolError" ? 2 : trigger === "firstToolError" ? 1 : 0);
     }
   });
@@ -182,7 +184,9 @@ describe("profile-aware evaluation harness", () => {
   it("calibrates traceable accept, reject, and inconclusive reviewer cases against exact run/task identities", async () => {
     const executor = await PiSessionExecutor.create({}); const task = syntheticManifest.tasks.find((value) => value.id === "regression-two")!;
     const [run] = await runEvaluation({ ...syntheticManifest, tasks: [task] }, executor, { repetitions: 1 }); expect(run).toBeDefined(); if (!run) return;
-    const review = (acceptance: HumanReviewDecision["acceptance"]): HumanReviewDecision => ({ runId: run.id, taskId: run.taskId, reviewer: "synthetic-reviewer", reviewedAt: "2026-01-01T00:00:00Z", acceptance, criticalFailure: acceptance === "reject", evidenceReference: `synthetic://review/${acceptance}`, rationale: `synthetic ${acceptance} calibration` });
+    if (run.result.observed.kind !== "observed") throw new Error("synthetic review run must be observed");
+    const profile = canonicalProfileDigest(run.result.observed.profile); if (!profile.ok) throw new Error("synthetic review profile must be canonical");
+    const review = (acceptance: HumanReviewDecision["acceptance"]): HumanReviewDecision => ({ runId: run.id, taskId: run.taskId, reviewer: "synthetic-reviewer", reviewedAt: "2026-01-01T00:00:00Z", acceptance, criticalFailure: acceptance === "reject", evidenceReference: `synthetic://review/${acceptance}`, rationale: `synthetic ${acceptance} calibration`, profileDigest: profile.digest, reportDigest: "a".repeat(64), sourceFingerprint: "b".repeat(64), extensionBuildFingerprint: "c".repeat(64) });
     expect(() => validateHumanReviewDecisions([review("accept"), review("reject"), review("inconclusive")], [run])).not.toThrow();
     expect(() => validateHumanReviewDecisions([{ ...review("accept"), taskId: "wrong-task" }], [run])).toThrow("does not match");
     expect(() => validateHumanReviewDecisions([{ ...review("accept"), runId: "" }], [run])).toThrow("not traceable");
@@ -201,8 +205,7 @@ describe("profile-aware evaluation harness", () => {
     expect(decisions.filter((record) => record.relation === "continuation").length).toBeGreaterThanOrEqual(3);
     expect(requests.some((record) => record.stopReason === "error")).toBe(true);
     expect(requests.some((record) => record.stopReason === "length")).toBe(true);
-    const manual = requests.find((record) => record.locallyAppliedProviderValue === "max");
-    expect(manual).toMatchObject({ patchStatus: "applied" });
+    expect(requests.every((record) => record.patchStatus === "shadow")).toBe(true);
     expect(requests.filter((record) => record.decisionId !== undefined).every((record) => typeof record.epochId === "string" && typeof record.sessionHash === "string")).toBe(true);
     expect(JSON.stringify(records)).not.toContain("synthetic feature.");
   });

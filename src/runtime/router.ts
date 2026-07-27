@@ -330,6 +330,9 @@ export function parseEffortCommand(input: string, router: EpochRouter): boolean 
   const command = match[1]!;
   if (command === "status") return true;
   if (command === "auto") return router.setManualOverride(undefined);
-  if (command === "shadow" || command === "enforce") { router.runtime.mode = command; return true; }
+  if (command === "shadow") { router.runtime.mode = "shadow"; return true; }
+  // The production extension owns qualification; router-only callers cannot
+  // accidentally turn an unqualified profile into an enforced one.
+  if (command === "enforce") return false;
   return router.setManualOverride(command);
 }

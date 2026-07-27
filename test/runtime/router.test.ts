@@ -104,11 +104,11 @@ describe("profile-relative epoch router", () => {
     expect(five.start({ prompt: "/goal architecture" })?.effectiveFloor.rungId).toBe("r3");
     expect(parseEffortCommand("/effort r4", five)).toBe(true); expect(five.effectiveRung()?.rungId).toBe("r4");
   });
-  it("keeps status and shadow/enforce session-local and idempotent", () => {
+  it("keeps status and shadow session-local while refusing unqualified enforce commands", () => {
     const r = router();
     expect(parseEffortCommand("/effort shadow", r)).toBe(true); expect(parseEffortCommand("/effort shadow", r)).toBe(true);
-    expect(parseEffortCommand("/effort enforce", r)).toBe(true); expect(parseEffortCommand("/effort status", r)).toBe(true);
-    expect(r.status()).toContain("mode:enforce");
+    expect(parseEffortCommand("/effort enforce", r)).toBe(false); expect(parseEffortCommand("/effort status", r)).toBe(true);
+    expect(r.status()).toContain("mode:shadow");
   });
   it("retains queued metadata only across a valid snapshot switch and advances generation exactly once", () => {
     const r = router();
