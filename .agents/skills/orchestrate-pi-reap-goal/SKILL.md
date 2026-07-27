@@ -56,6 +56,26 @@ Permit direct plan reads only for packet repair, an ambiguity the packet explici
 
 Do not send the full goal-state document to routine workers. Require PR-readiness and final-acceptance reviewers to read its current declarations and the relevant PR row so they evaluate against the latest recorded process contract.
 
+## Maintain the context budget
+
+Run `scripts/check_context_budget.sh` after material harness changes and at every PR boundary. If an auto-loaded file approaches its budget, compact it before the next dispatch. Move completed successor-PR detail to `docs/harness/profile-pr-evidence/`, move chronological events to `docs/harness/v1-goal-history.md`, and keep only current declarations, the active boundary, the compact PR ledger, live blockers, and links in the goal-state record. Predecessor evidence remains historical.
+
+Permit the root to edit loaded harness during the goal to remove stale or duplicated routing text. Preserve hashes, live authority, acceptance conclusions, unresolved risks, and evidence links. Never replace evidence with a summary that cannot lead an acceptance reviewer back to the raw artifact.
+
+## Pause and resume across machines
+
+When the user pauses for a machine handoff:
+
+1. finish only the in-flight bounded operation;
+2. reconcile live repository and PR evidence;
+3. record the pause, next PR boundary, released leases, and exact resume condition in `docs/harness/v1-goal-state.md`;
+4. update the compact index at `docs/harness/v1-continuation.md`;
+5. validate the context budget and `.agents/skills/orchestrate-pi-reap-goal/scripts/resume_v1_goal.sh`;
+6. publish the handoff on `main` through an authorized publication worker;
+7. keep the platform goal active and do not preload the next PR packet.
+
+On the new machine, run the resume script. It verifies the frozen-plan hash, repository identity, clean worktree, and current remote refs before launching a new interactive Sol/xhigh coordinator. Treat the continuation file as a routing index, not a substitute for live evidence. Reconcile current GitHub state, reactivate the execution record, and only then resolve the next packet.
+
 ## Dispatch within two slots
 
 Before every spawn, list the agent tree and count live non-root agents. Never exceed two and never permit workers to spawn children. Do not fill an idle slot without independent useful work.
