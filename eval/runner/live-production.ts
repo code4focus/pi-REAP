@@ -10,9 +10,11 @@ import {
 } from "./live-driver.js";
 import { recordPiAssistantUsage } from "./live-observability.js";
 import type { AutomaticEffort } from "../../src/domain/effort.js";
+import type { EffortRouterConfig } from "../../src/config/schema.js";
+import type { ExtensionOptions } from "../../src/index.js";
 import { effectiveCostMicros } from "./cost.js";
 import type { UsageMetrics } from "./types.js";
-import { expectedExtensionBuildFingerprint, expectedSourceFingerprint } from "./live-acceptance-pins.js";
+import { currentImplementationBinding } from "./live-acceptance-pins.js";
 import { extensionBuildFingerprint, sourceManifestFingerprint } from "./source-fingerprints.js";
 
 const sentinelName = ".pi-reap-pr6-live-sentinel";
@@ -64,7 +66,7 @@ export function liveUsageFromPiAssistantUsage(assistantUsage: PiTerminalAssistan
 export function validateProductionBuild(repositoryRoot: string): { readonly sourceFingerprint: string; readonly extensionBuildFingerprint: string } {
   const root = realpathSync(repositoryRoot);
   const sourceFingerprint = sourceManifestFingerprint(root); const extensionBuild = extensionBuildFingerprint(root);
-  if (sourceFingerprint !== expectedSourceFingerprint || extensionBuild !== expectedExtensionBuildFingerprint) throw new Error("production extension source or build fingerprint is stale");
+  if (sourceFingerprint !== currentImplementationBinding.sourceFingerprint || extensionBuild !== currentImplementationBinding.extensionBuildFingerprint) throw new Error("production extension source or build fingerprint is stale");
   return Object.freeze({ sourceFingerprint, extensionBuildFingerprint: extensionBuild });
 }
 
@@ -161,6 +163,16 @@ export function productionAdapterFactory(installed: InstalledPi, privateRoot: Pr
   return async () => new PiSdkCaptureAdapter(installed, privateRoot, repositoryRoot);
 }
 
+/** Pure, read-only v1 configuration for one bounded production capture call. */
+export function productionExtensionOptions(call: Pick<PlannedCall, "extensionMode" | "ordinal">, telemetryDirectory: string): ExtensionOptions {
+  const config: EffortRouterConfig = {
+    enabled: true, mode: call.extensionMode, ambiguousEffort: "high", failureEffort: "xhigh",
+    telemetry: { enabled: true, includePromptText: false, directory: telemetryDirectory },
+    ui: { showStatus: false, notifyOnEscalation: false },
+  };
+  return { telemetryDirectory, sessionId: `live-${call.ordinal}`, load: async () => config };
+}
+
 /** Client-side abort guard; it never changes a provider payload. */
 export class CaptureAbortGuard {
   private streamedBytes = 0;
@@ -220,7 +232,7 @@ class PiSdkCaptureAdapter implements CaptureAdapter {
         state.baselinePayload = cloneJson(event.payload);
         state.baselinePayloadHash = sha256(canonicalJson(state.baselinePayload));
       }));
-      const productFactory = production.createExtension({ telemetryDirectory, sessionId: `live-${call.ordinal}`, mode: call.extensionMode });
+      const productFactory = production.createExtension(productionExtensionOptions(call, telemetryDirectory));
       const applied = observerFactory((pi) => {
         pi.on("before_provider_request", (event) => {
           state.providerRequests += 1;
@@ -324,7 +336,7 @@ interface PiSdkModule {
 }
 interface AuthModule { AuthStorage: { inMemory(data: Record<string, Credential>): unknown }; readStoredCredential(provider: string, path: string): Credential | undefined }
 type Credential = { type: "api_key"; key?: string } | { type: "oauth"; refresh: string; access: string; expires: number };
-interface ProductionExtensionModule { createExtension(options: Record<string, unknown>): ExtensionFactory }
+interface ProductionExtensionModule { createExtension(options: ExtensionOptions): ExtensionFactory }
 interface AgentSession {
   sessionFile?: string; messages: readonly AssistantMessage[]; getActiveToolNames(): string[];
   subscribe(handler: (event: { type: string; readonly [key: string]: unknown }) => void): () => void;

@@ -1,7 +1,6 @@
 {
   "name": "pi-reap",
-  "version": "0.1.0",
-  "private": true,
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
@@ -13,8 +12,9 @@
     "eval:sample": "vitest run eval/test/sample-report.test.ts",
     "eval:live:dry-run": "pnpm eval:build && node scripts/live-acceptance-driver.mjs",
     "fixtures:verify": "node scripts/verify-pi-fixtures.mjs",
-    "release:check": "pnpm fixtures:verify && node scripts/release-check.mjs --dry-run",
-    "rollback:check": "node scripts/rollback-check.mjs --dry-run"
+    "release:check": "node scripts/release-check.mjs --dry-run",
+    "rollback:check": "node scripts/rollback-check.mjs --dry-run",
+    "package:check": "node scripts/package-check.mjs --dry-run"
   },
   "dependencies": {
     "@sinclair/typebox": "^0.34.41",
@@ -26,6 +26,22 @@
     "oxlint": "^1.23.0",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "src"],
+  "keywords": ["pi-package", "pi", "reasoning", "effort-routing"],
+  "pi": {
+    "extensions": ["./src/index.ts"]
   },
   "packageManager": "pnpm@10.32.1",
   "piReapCompatibility": {

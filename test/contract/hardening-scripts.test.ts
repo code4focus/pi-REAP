@@ -61,19 +61,35 @@ describe("v1 hardening procedures", () => {
     const directory = await fixtureRoot(async (manifest, root) => mutate(root, manifest)); await rejectsFixture(directory, message);
   });
 
-  it("pins release workflow permissions and action revisions", async () => {
+  it("pins the authoritative release gate to PRs, immutable actions, and one local command", async () => {
     const workflow = await readFile(join(process.cwd(), ".github/workflows/release-gate.yml"), "utf8");
     const release = await readFile(join(process.cwd(), "docs/RELEASE.md"), "utf8");
+    const releaseScript = await readFile(join(process.cwd(), "scripts/release-check.mjs"), "utf8");
     expect(workflow).toContain("permissions:\n  contents: read");
+    expect(workflow).toContain("pull_request:");
+    expect(workflow).toContain("- run: pnpm release:check");
+    expect(workflow).not.toContain("- run: pnpm test");
     const pins = { "actions/checkout": ["11bd71901bbe5b1630ceea73d27597364c9af683", "v4.2.2"], "pnpm/action-setup": ["0ebf47130e4866e96fce0953f49152a61190b271", "v6.0.9"], "actions/setup-node": ["1d0ff469b7ec7b3cb9d8673fde0c81c44821de2a", "v4.2.0"] } as const;
     for (const [action, [sha, version]] of Object.entries(pins)) { expect(workflow).toContain(`${action}@${sha} # ${version}`); expect(release).toContain(sha); expect(release).toContain(version); }
     expect(workflow).not.toMatch(/uses: .+@v\d/);
+    for (const command of ["fixtures:verify", "build", "eval:build", "lint", "typecheck", "eval:typecheck", "eval:sample", "test", "rollback:check", "package:check"]) expect(releaseScript).toContain(`"${command}"`);
+    expect(releaseScript).not.toContain('"release:check"');
   });
 
-  it("exercises release and rollback only in their safe dry-run modes", async () => {
-    const release = await execFileAsync(process.execPath, ["scripts/release-check.mjs", "--dry-run"], { cwd: process.cwd() });
+  it("exercises rollback only in its safe dry-run mode", async () => {
     const rollback = await execFileAsync(process.execPath, ["scripts/rollback-check.mjs", "--dry-run"], { cwd: process.cwd() });
-    expect(release.stdout).toContain("release dry-run");
     expect(rollback.stdout).toContain("rollback dry-run");
+  });
+
+  it("declares a loadable public Pi package without claiming a release exists", async () => {
+    const pkg = JSON.parse(await readFile(join(process.cwd(), "package.json"), "utf8")) as Record<string, unknown>;
+    const release = await readFile(join(process.cwd(), "docs/RELEASE.md"), "utf8");
+    expect(pkg.version).toBe("1.0.0"); expect(pkg.private).not.toBe(true);
+    expect(pkg.keywords).toEqual(expect.arrayContaining(["pi-package"]));
+    expect((pkg.pi as { extensions: string[] }).extensions).toEqual(["./src/index.ts"]);
+    expect((pkg.peerDependencies as Record<string, string>)["@earendil-works/pi-coding-agent"]).toBe("*");
+    expect((pkg.devDependencies as Record<string, string>)["@earendil-works/pi-coding-agent"]).toBe("0.82.1");
+    expect(release).toContain("git:github.com/code4focus/pi-REAP@<reviewed-commit>");
+    expect(release).toContain("No tag or published release is created");
   });
 });

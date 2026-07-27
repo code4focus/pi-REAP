@@ -6,9 +6,11 @@ import { syntheticCacheCrossover, assessCrossover } from "../runner/cache-crosso
 import { effectiveCostMicros, syntheticTokenPricing } from "../runner/cost.js";
 import { summarizeEvaluation } from "../runner/metrics.js";
 import { runCandidateMatrix, runEvaluation } from "../runner/run.js";
+import { PiSessionExecutor } from "../runner/pi-session.js";
 import type { EvaluationExecutor, ExecutionRequest } from "../runner/types.js";
 
-const executor: EvaluationExecutor = { execute: async (task, request) => ({ output: task.grader.expected, selectedEffort: request.requestedEffort ?? (task.taskClass === "high_risk" ? "xhigh" : task.taskClass === "simple_query" ? "low" : "medium"), providerRequests: 1, toolRounds: 2, retries: 1, usage: { inputTokens: 20, uncachedInputTokens: 10, outputTokens: 2, reasoningTokens: 3, cacheReadTokens: 10, cacheWriteTokens: 1 }, latencyMs: 6 }) };
+const executor: EvaluationExecutor = { execute: async (task, request) => ({ output: task.grader.expected, selectedEffort: request.requestedEffort ?? "medium", providerRequests: 1, toolRounds: 2, retries: 1, usage: { inputTokens: 20, uncachedInputTokens: 10, outputTokens: 2, reasoningTokens: 3, cacheReadTokens: 10, cacheWriteTokens: 1 }, latencyMs: 6 }) };
+const productionOptions = { load: async () => ({ enabled: true, mode: "enforce" as const, ambiguousEffort: "high" as const, failureEffort: "xhigh" as const, telemetry: { enabled: false, includePromptText: false, directory: "synthetic" }, ui: { showStatus: false, notifyOnEscalation: false } }) };
 
 describe("evaluation harness", () => {
   it("enforces fixed efforts, repeats regression comparisons, and calculates cost", async () => {
@@ -56,5 +58,49 @@ describe("evaluation harness", () => {
     for (const required of ["fixed-xhigh", "fixed-high", "policy-shadow", "policy-enforce", "tool rounds", "cache read", "cache write", "provider requests", "retries", "effective cost", "Task-class strata", "Outcome oracle", "Traceable human review", "reduced reasoning/output cost", "synthetic sample"]) expect(report).toContain(required);
     expect(report).toContain("synthetic fixtures only");
     expect(report).not.toContain("release benefit");
+  });
+
+  it("drives controlled provider-adapter baselines and production-extension policy through one session", async () => {
+    const live = await PiSessionExecutor.create(productionOptions);
+    const runs = await runEvaluation(syntheticManifest, live, { corpusMode: "regression", repetitions: 1 });
+    expect(runs).toHaveLength(24);
+    expect(runs.filter((run) => run.mode === "fixed-xhigh").every((run) => run.result.selectedEffort === "xhigh")).toBe(true);
+    expect(runs.filter((run) => run.mode === "fixed-high").every((run) => run.result.selectedEffort === "high")).toBe(true);
+    const mismatchedLabel = { ...syntheticManifest.tasks[0]!, taskClass: "high_risk" as const, description: "What is JSON?" };
+    expect((await live.execute(mismatchedLabel, { mode: "policy-enforce" })).selectedEffort).toBe("low");
+  });
+
+  it("records fixed and candidate efforts from their controlled adapter patches, not a session floor", async () => {
+    const live = await PiSessionExecutor.create(productionOptions);
+    const highRiskLabel = { ...syntheticManifest.tasks[0]!, taskClass: "high_risk" as const, description: "implement this feature" };
+    expect((await live.execute(highRiskLabel, { mode: "fixed-high", requestedEffort: "high" })).selectedEffort).toBe("high");
+    expect((await live.execute(highRiskLabel, { mode: "candidate", requestedEffort: "low" })).selectedEffort).toBe("low");
+    expect(live.controlledAdapterCalls).toBe(2);
+    expect(live.policyProviderHookCalls).toBe(0);
+    const candidateRuns = await runCandidateMatrix(syntheticManifest, live, { corpusMode: "smoke" });
+    expect(candidateRuns).toHaveLength(96);
+    expect(live.controlledAdapterCalls).toBe(98);
+  });
+
+  it("rejects a controlled arm when the provider adapter maps a requested effort differently", async () => {
+    const mapped = await PiSessionExecutor.create(productionOptions, { api: "openai-responses", reasoning: true, thinkingLevelMap: { low: "high" } });
+    await expect(mapped.execute(syntheticManifest.tasks[0]!, { mode: "candidate", requestedEffort: "low" })).rejects.toThrow("control adapter applied high; expected low");
+  });
+
+  it("covers production epoch transitions and clears the local max override on session replacement", async () => {
+    const live = await PiSessionExecutor.create(productionOptions);
+    live.runLifecycle("implement this feature"); live.failTool(); live.failTool(); live.settle();
+    expect(live.runLifecycle("explain this file")).toBe("medium"); live.settle();
+    live.runLifecycle("implement this feature"); live.failTool(); live.failTool(); live.settle();
+    expect(live.runLifecycle("implement a separate feature")).toBe("high"); live.settle();
+    live.runLifecycle("What is JSON?"); live.settle("error");
+    expect(live.runLifecycle("continue")).toBe("xhigh"); live.settle();
+    for (const reason of ["new", "resume", "fork", "reload"] as const) {
+      await live.setLocalEffort("max");
+      await live.switchSession(reason);
+      const next = live.runLifecycle("What is JSON?");
+      expect(["low", "medium", "high", "xhigh"]).toContain(next);
+      live.settle();
+    }
   });
 });

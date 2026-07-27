@@ -1,6 +1,7 @@
 name: Release gate
 
 on:
+  pull_request:
   workflow_dispatch:
   push:
     tags: ["v*"]
@@ -21,11 +22,4 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm build
-      - run: pnpm lint
-      - run: pnpm typecheck
-      - run: pnpm eval:build
-      - run: pnpm eval:typecheck
-      - run: pnpm test
       - run: pnpm release:check
-      - run: pnpm rollback:check

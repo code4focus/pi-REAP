@@ -5,6 +5,7 @@ import {
   canonicalPayloadHash,
   diagnoseLaterEffortMutator,
   patchProviderPayload,
+  patchProviderPayloadOutcome,
   patchReasoningEffort,
   resolveProviderEffort,
   supportsEffortRouting,
@@ -69,6 +70,21 @@ describe("provider patch layer", () => {
       observedEffort: "low",
       message: expect.stringContaining("place Pi REAP last"),
     });
+  });
+
+  it("reports truthful structured outcomes without changing failure payload identity", () => {
+    const payload = { reasoning: { effort: "medium", context: "synthetic" } };
+    const applied = patchProviderPayloadOutcome(codexModel, payload, "low");
+    expect(applied).toMatchObject({ status: "applied", originalEffort: "medium", appliedEffort: "low" });
+    expect(withoutReasoningEffort(applied.payload)).toStrictEqual(withoutReasoningEffort(payload));
+    for (const [model, body, status] of [
+      [{ api: "other", reasoning: true }, payload, "unsupported"],
+      [codexModel, { reasoning: { effort: 4 } }, "invalid_payload"],
+      [{ ...codexModel, thinkingLevelMap: { low: 1 } }, payload, "mapping_failed"],
+    ] as const) {
+      const outcome = patchProviderPayloadOutcome(model, body, "low");
+      expect(outcome.status).toBe(status); expect(outcome.payload).toBe(body); expect(outcome.appliedEffort).toBeUndefined();
+    }
   });
 
   it("creates only the requested effort when supported payload reasoning is absent", () => {

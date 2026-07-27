@@ -4,7 +4,7 @@ import type { RoutingDecision } from "../../src/domain/routing-decision.js";
 import type { TaskClass } from "../../src/domain/task-epoch.js";
 import { acceptedBaseSha256, fixedFixtureHash, frozenPlanSha256, type LiveMode, type LiveTaskId, type RouteCase, type SanitizedLiveAcceptanceArtifact, type SanitizedLiveRun, type SanitizedReview } from "./live-acceptance.js";
 import { EpochRouter } from "../../src/runtime/router.js";
-import { expectedExtensionBuildFingerprint, expectedSourceFingerprint } from "./live-acceptance-pins.js";
+import { currentImplementationBinding } from "./live-acceptance-pins.js";
 import { cacheControlsFingerprint, type CacheCrossoverGroup, type CacheCrossoverSample, type CacheExperimentControls } from "./cache-crossover.js";
 import { classifyLiveCacheComparison, recordPiAssistantUsage, type LiveCacheVerdict } from "./live-observability.js";
 import { canonicalPriceTableSha256, canonicalArtifactSha256, validateSanitizedLiveArtifact } from "./live-acceptance.js";
@@ -271,7 +271,7 @@ export function authorizationEnvelope(tasks: readonly PrivateTask[], catalog: Ca
     schemaVersion: 3, provider: configuredProvider, model: configuredModel, api: configuredApi, caps: liveCaps,
     ceilingRates: ceilingRatesMicroUsd, catalogRates: catalog.ratesPerMillion,
     runtime: { piExecutableSha256: catalog.piExecutableSha256, piPackageSha256: catalog.piPackageSha256, piCatalogSha256: catalog.piCatalogSha256, piPackageVersion: catalog.piPackageVersion },
-    sourceFingerprint: expectedSourceFingerprint, extensionBuildFingerprint: expectedExtensionBuildFingerprint,
+    sourceFingerprint: currentImplementationBinding.sourceFingerprint, extensionBuildFingerprint: currentImplementationBinding.extensionBuildFingerprint,
     planSha256: frozenPlanSha256, acceptedBaseSha256, taskManifestSha256: taskManifestSha256(tasks), callPlanSha256: sha256(canonicalJson(calls)),
     cachePrefixMeasurement: measurement,
   };
@@ -283,7 +283,7 @@ function legacyAuthorizationEnvelope(tasks: readonly PrivateTask[], catalog: Cat
     schemaVersion: 2, provider: configuredProvider, model: configuredModel, api: configuredApi, caps: liveCaps,
     ceilingRates: ceilingRatesMicroUsd, catalogRates: catalog.ratesPerMillion,
     runtime: { piExecutableSha256: catalog.piExecutableSha256, piPackageSha256: catalog.piPackageSha256, piCatalogSha256: catalog.piCatalogSha256, piPackageVersion: catalog.piPackageVersion },
-    sourceFingerprint: expectedSourceFingerprint, extensionBuildFingerprint: expectedExtensionBuildFingerprint,
+    sourceFingerprint: currentImplementationBinding.sourceFingerprint, extensionBuildFingerprint: currentImplementationBinding.extensionBuildFingerprint,
     planSha256: frozenPlanSha256, acceptedBaseSha256, taskManifestSha256: taskManifestSha256(tasks), callPlanSha256: sha256(canonicalJson(calls)),
   };
 }
@@ -577,7 +577,7 @@ export function validateProductionInitialRoutes(tasks: readonly PrivateTask[]): 
   validatePrivateTasks(tasks);
   for (const task of tasks) {
     let id = 0;
-    const router = new EpochRouter({ mode: "shadow", now: () => 0, id: () => `preflight-${++id}` });
+    const router = new EpochRouter({ now: () => 0, id: () => `preflight-${++id}` });
     validateProductionInitialDecision(task.id, router.start({ prompt: task.body, source: "extension" }));
   }
 }
@@ -631,7 +631,7 @@ function validateEnvelope(value: AuthorizationEnvelope): void {
     "taskManifestSha256", "callPlanSha256", "cachePrefixMeasurement",
   ], "authorization envelope");
   if (value.schemaVersion !== 3 || value.provider !== configuredProvider || value.model !== configuredModel || value.api !== configuredApi ||
-    value.sourceFingerprint !== expectedSourceFingerprint || value.extensionBuildFingerprint !== expectedExtensionBuildFingerprint ||
+    value.sourceFingerprint !== currentImplementationBinding.sourceFingerprint || value.extensionBuildFingerprint !== currentImplementationBinding.extensionBuildFingerprint ||
     value.planSha256 !== frozenPlanSha256 || value.acceptedBaseSha256 !== acceptedBaseSha256 ||
     canonicalJson(value.caps) !== canonicalJson(liveCaps) || canonicalJson(value.ceilingRates) !== canonicalJson(ceilingRatesMicroUsd) ||
     canonicalJson(value.catalogRates) !== canonicalJson({ input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 })) fail("authorization envelope has unpinned content");

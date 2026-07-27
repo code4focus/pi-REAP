@@ -12,6 +12,14 @@ the runtime build fingerprint. Reproduce both with:
 
 `pnpm build && node scripts/reproduce-live-fingerprints.mjs .`
 
+`historicalV3CanaryBinding` is immutable evidence from the obsolete
+`cbdbf256…` base. Its normalized-only cache result is
+`OBSERVABILITY_UNAVAILABLE`, so it is deliberately stale and non-promotable.
+`currentImplementationBinding` names the corrected accepted base and the
+reproducible current source/build fingerprints. A trusted promotion requires
+that current binding and a raw-observed qualified `PASS`; historical v3 cannot
+satisfy either condition.
+
 The in-process acceptance API consumes the pinned one-time challenge only after
 all signature, binding, time, and ceiling checks pass. A second successful-use
 attempt in that process is rejected as a replay. The coordinator must durably

@@ -1,116 +1,44 @@
-import { diagnoseLaterEffortMutator, patchProviderPayload, type ProviderModel } from "./provider/patch.js";
-import { effortValues, type Effort } from "./domain/effort.js";
+import type { ExtensionAPI, ExtensionContext, ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import { readFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { homedir } from "node:os";
+import { isAbsolute, resolve } from "node:path";
+import { defaultConfigPaths, loadConfig } from "./config/load.js";
+import { diagnoseLaterEffortMutator, patchProviderPayloadOutcome, type ProviderModel } from "./provider/patch.js";
 import { EpochRouter, parseEffortCommand } from "./runtime/router.js";
 import { TelemetryRuntime, type Usage } from "./telemetry/runtime.js";
 import { TelemetryWriter } from "./telemetry/writer.js";
-import type { RoutingDecision } from "./domain/routing-decision.js";
+import { effortValues, type Effort } from "./domain/effort.js";
 
-export interface PiInput { text: string; source?: string; streamingBehavior?: "steer" | "followUp" | string }
-export interface PiRequest { payload: unknown }
-export interface PiContext { model?: ProviderModel & { id?: unknown; provider?: unknown }; ui?: { setStatus(key: string, text: string | undefined): void } }
-export type PiSessionStartReason = "resume" | "fork" | "reload" | "startup" | "new";
-export interface PiLifecycleEvents {
-  session_start: { reason: PiSessionStartReason };
-  input: { ctx?: PiContext; text?: string; source?: string; streamingBehavior?: "steer" | "followUp"; input?: PiInput };
-  before_agent_start: { ctx?: PiContext; prompt?: string };
-  before_provider_request: { ctx: PiContext; request: PiRequest };
-  tool_call: { ctx: PiContext; toolName: string };
-  tool_execution_end: { ctx?: PiContext; isError?: boolean; error?: unknown };
-  message_end: { ctx?: PiContext; stopReason?: string; message?: Record<string, unknown> };
-  session_compact: { ctx: PiContext; reason: string; willRetry: boolean };
-  agent_settled: { ctx?: PiContext; failed?: boolean };
-}
+export type PiExtension = ExtensionFactory;
+export interface ExtensionOptions { load?: () => ReturnType<typeof loadConfig>; telemetryDirectory?: string; sessionId?: string; telemetryNonce?: () => string }
+const loadProductionConfig = () => loadConfig({ readFile: async (path) => { try { return await readFile(path, "utf8"); } catch { return undefined; } } }, defaultConfigPaths(homedir(), process.cwd()));
 
-export interface PiExtensionHost {
-  registerTool(definition: unknown): void;
-  setThinkingLevel(level: string): void;
-  on<E extends keyof PiLifecycleEvents>(event: E, handler: (event: PiLifecycleEvents[E], context?: PiContext) => void | Partial<PiLifecycleEvents[E]> | unknown): void;
-  registerCommand(name: string, options: { description?: string; handler: (input: string, context: PiContext) => void | Promise<void> }): void;
-}
-
-export type PiExtension = (pi: PiExtensionHost) => void;
-/** Local, non-persisted startup controls. Invalid input falls back to shadow. */
-export interface ExtensionOptions { telemetryDirectory?: string; sessionId?: string; mode?: unknown }
-
-/** Registers only Pi-local commands and request-local lifecycle handlers. */
-export const createExtension = (options: ExtensionOptions = {}): PiExtension => (pi) => {
-  const router = new EpochRouter({ mode: initialMode(options.mode) });
-  const telemetry = new TelemetryRuntime(new TelemetryWriter({ ...(options.telemetryDirectory ? { directory: options.telemetryDirectory } : {}), ...(options.sessionId ? { sessionId: options.sessionId } : {}) }));
-  let pendingDecision: { decision: RoutingDecision; promptChars: number } | undefined;
-  const updateStatus = (context?: PiContext) => context?.ui?.setStatus("effort-router", `${router.status()}\n${telemetry.writer.status()}`);
-  pi.registerCommand("effort", { description: "Show or change local effort routing", handler: (input, context) => { parseEffortCommand(`/effort ${input}`, router); updateStatus(context); } });
-  pi.registerCommand("effort-conflict", { description: "Diagnose a locally observed later reasoning.effort mutation", handler: (input, context) => {
-    const values = input.trim().split(/\s+/); const diagnostic = values.length === 2 ? diagnoseLaterEffortMutator(values[0], values[1]) : undefined;
-    context.ui?.setStatus("effort-router", diagnostic?.message ?? "Usage: /effort-conflict <requested-effort> <locally-observed-effort>. This compares local observations only, not provider wire truth.");
-  } });
-  pi.on("session_start", (event, context) => { router.setResumeReason(event.reason); updateStatus(context); });
-  pi.on("input", (event) => {
-    const input = event.input;
-    const text = typeof event.text === "string" ? event.text : input?.text;
-    const source = event.source ?? input?.source; const streamingBehavior = event.streamingBehavior ?? input?.streamingBehavior;
-    if (text) router.queueInput({ prompt: text, ...(source ? { source } : {}), ...(streamingBehavior ? { streamingBehavior } : {}) });
-  });
-  pi.on("before_agent_start", (event, context) => {
-    if (typeof event.prompt === "string") router.queueInput({ prompt: event.prompt });
-    const decision = router.startQueued();
-    if (decision) pendingDecision = { decision, promptChars: router.latestPromptChars() };
-    updateStatus(context);
-  });
-  pi.on("before_provider_request", (event, context) => {
-    const synthetic = "request" in event;
-    const request = synthetic ? event.request : { payload: (event as { payload: unknown }).payload };
-    const model = synthetic ? event.ctx.model : context?.model;
-    const effort = router.onProviderRequest();
-    if (effort === undefined) return undefined;
-    const epoch = router.runtime.currentEpoch;
-    if (!epoch) return undefined;
-    if (router.runtime.mode === "shadow") {
-      const applied = baselineEffort(request.payload);
-      if (pendingDecision) { telemetry.decision(pendingDecision.decision, pendingDecision.promptChars, "shadow", pendingDecision.decision.selectedEffort, applied, epoch.lastPromptHash); pendingDecision = undefined; }
-      telemetry.request(epoch, model, request.payload, "shadow", effort, applied, false);
-      return undefined;
-    }
-    const payload = patchProviderPayload(model, request.payload, effort);
-    if (pendingDecision) { telemetry.decision(pendingDecision.decision, pendingDecision.promptChars, "enforce", pendingDecision.decision.selectedEffort, effort, epoch.lastPromptHash); pendingDecision = undefined; }
-    telemetry.request(epoch, model, request.payload, "enforce", effort, effort, payload !== request.payload);
-    if (payload === request.payload) return undefined;
-    return synthetic ? { request: { ...request, payload } } : payload;
-  });
-  pi.on("tool_call", (event, context) => { router.onToolCall(event.toolName); updateStatus(context); });
-  pi.on("tool_execution_end", (event, context) => { if (event.isError === true || event.error !== undefined) router.onToolError(); updateStatus(context); });
-  pi.on("message_end", (event, context) => {
-    const actualMessage = event.message;
-    if (actualMessage && actualMessage.role !== "assistant") return undefined;
-    const usage = actualMessage ? usageFrom(actualMessage.usage) : undefined;
-    const stopReason = "stopReason" in event && typeof event.stopReason === "string" ? event.stopReason : typeof actualMessage?.stopReason === "string" ? actualMessage.stopReason : undefined;
-    telemetry.response(stopReason, usage); router.onProviderEnd(stopReason); updateStatus(context);
-  });
-  pi.on("session_compact", (event, context) => { router.onCompaction(event.reason, event.willRetry); updateStatus(context); });
-  pi.on("agent_settled", (_event, context) => { router.settle(false); telemetry.flushUnsettled(); const epoch = router.runtime.currentEpoch; if (epoch) telemetry.epoch(epoch); updateStatus(context); });
+/** Pi 0.82.1 extension factory. Telemetry is best-effort and session scoped. */
+export const createExtension = (options: ExtensionOptions = {}): PiExtension => async (pi: ExtensionAPI) => {
+  const config = await (options.load ?? loadProductionConfig)();
+  if (!config.enabled) return;
+  let router: EpochRouter | undefined;
+  let telemetry: TelemetryRuntime | undefined;
+  let pendingDecision: ReturnType<EpochRouter["start"]> | undefined;
+  let pendingTelemetry: { promptChars: number; promptHash: string; promptText?: string } | undefined;
+  let lastRunFailed = false;
+  const status = (ctx: ExtensionContext) => { if (config.ui.showStatus) ctx.ui.setStatus("pi-reap", router ? `${router.status()}${telemetry ? `\n${telemetry.writer.status()}` : ""}` : undefined); };
+  const closeTelemetry = () => { telemetry?.flushUnsettled(); telemetry = undefined; pendingDecision = undefined; pendingTelemetry = undefined; };
+  pi.registerCommand("effort", { description: "Set Pi REAP effort for this session only.", handler: async (args, ctx) => { if (router && parseEffortCommand(`/effort ${args}`, router)) status(ctx); } });
+  pi.registerCommand("effort-conflict", { description: "Diagnose a locally observed later reasoning.effort mutation.", handler: async (args, ctx) => { const values = args.trim().split(/\s+/); const diagnostic = values.length === 2 ? diagnoseLaterEffortMutator(values[0], values[1]) : undefined; ctx.ui.setStatus("pi-reap", diagnostic?.message ?? "Usage: /effort-conflict <requested-effort> <locally-observed-effort>. This compares local observations only, not provider wire truth."); } });
+  pi.on("session_start", (event, ctx) => { closeTelemetry(); router = new EpochRouter({ resumeReason: event.reason, config }); lastRunFailed = false; if (config.telemetry.enabled) { const directory = options.telemetryDirectory ?? config.telemetry.directory; telemetry = new TelemetryRuntime(new TelemetryWriter({ directory: isAbsolute(directory) ? directory : resolve(ctx.cwd, directory), sessionId: `${options.sessionId ?? ctx.sessionManager.getSessionId()}:${options.telemetryNonce?.() ?? randomUUID()}` })); } status(ctx); });
+  pi.on("session_shutdown", (_event, ctx) => { closeTelemetry(); router = undefined; lastRunFailed = false; if (config.ui.showStatus) ctx.ui.setStatus("pi-reap", undefined); });
+  pi.on("input", (event) => router?.queueInput({ prompt: event.text, source: event.source, ...(event.streamingBehavior ? { streamingBehavior: event.streamingBehavior } : {}) }));
+  pi.on("before_agent_start", (event, ctx) => { pendingTelemetry = { promptChars: event.prompt.length, promptHash: createHash("sha256").update(event.prompt).digest("hex"), ...(config.telemetry.includePromptText ? { promptText: event.prompt } : {}) }; pendingDecision = router?.startQueued(); status(ctx); });
+  pi.on("before_provider_request", (event, ctx) => { const effort = router?.onProviderRequest(); const epoch = router?.runtime.currentEpoch; if (!effort || !epoch || !router) return undefined; const original = baselineEffort(event.payload); if (router.runtime.mode === "shadow") { if (pendingDecision && pendingTelemetry) telemetry?.decision(pendingDecision, pendingTelemetry.promptChars, "shadow", pendingDecision.selectedEffort, original, pendingTelemetry.promptHash, pendingTelemetry.promptText); pendingDecision = undefined; pendingTelemetry = undefined; telemetry?.request(epoch, ctx.model as ProviderModel | undefined, event.payload, "shadow", { status: "shadow", ...(original ? { originalEffort: original, appliedEffort: original } : {}) }); return undefined; } const outcome = patchProviderPayloadOutcome(ctx.model as ProviderModel | undefined, event.payload, effort); if (pendingDecision && pendingTelemetry) telemetry?.decision(pendingDecision, pendingTelemetry.promptChars, "enforce", pendingDecision.selectedEffort, outcome.status === "applied" ? outcome.appliedEffort : undefined, pendingTelemetry.promptHash, pendingTelemetry.promptText); pendingDecision = undefined; pendingTelemetry = undefined; telemetry?.request(epoch, ctx.model as ProviderModel | undefined, event.payload, "enforce", outcome); return outcome.status === "applied" ? outcome.payload : undefined; });
+  pi.on("tool_call", (event, ctx) => { router?.onToolCall(event.toolName); status(ctx); });
+  pi.on("tool_execution_end", (event, ctx) => { if (event.isError) { const before = router?.effectiveEffort(); router?.onToolError(); if (config.ui.notifyOnEscalation && before !== undefined && router?.effectiveEffort() !== before) ctx.ui.notify("Pi REAP raised effort after a tool failure", "warning"); } status(ctx); });
+  pi.on("message_end", (event, ctx) => { if (event.message.role === "assistant") { lastRunFailed = event.message.stopReason === "error" || event.message.stopReason === "length"; const before = router?.effectiveEffort(); telemetry?.response(event.message.stopReason, usageFrom(event.message.usage)); router?.onProviderEnd(event.message.stopReason); if (lastRunFailed && config.ui.notifyOnEscalation && before !== undefined && router?.effectiveEffort() !== before) ctx.ui.notify("Pi REAP raised effort after an assistant failure", "warning"); } status(ctx); });
+  pi.on("session_compact", (event, ctx) => { router?.onCompaction(event.reason, event.willRetry); status(ctx); });
+  pi.on("agent_settled", (_event, ctx) => { telemetry?.flushUnsettled(); router?.settle(lastRunFailed); lastRunFailed = false; if (router?.runtime.currentEpoch) telemetry?.epoch(router.runtime.currentEpoch); status(ctx); });
 };
-
-/** The production entry point writes only redacted observation records. */
 export const extension: PiExtension = createExtension();
-
-function initialMode(value: unknown): "shadow" | "enforce" {
-  return value === "enforce" || value === "shadow" ? value : "shadow";
-}
-
-function baselineEffort(payload: unknown): Effort | undefined {
-  if (typeof payload === "object" && payload !== null && !Array.isArray(payload)) {
-    const reasoning = (payload as Record<string, unknown>).reasoning;
-    const candidate = typeof reasoning === "object" && reasoning !== null && !Array.isArray(reasoning) ? (reasoning as Record<string, unknown>).effort : undefined;
-    if (typeof candidate === "string" && (effortValues as readonly string[]).includes(candidate)) return candidate as Effort;
-  }
-  return undefined;
-}
-
-function usageFrom(value: unknown): Usage | undefined {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
-  const usage = value as Record<string, unknown>;
-  const number = (...keys: string[]) => { const value = keys.map((key) => usage[key]).find((item) => typeof item === "number"); return typeof value === "number" ? value : undefined; };
-  const inputTokens = number("inputTokens", "input"); const outputTokens = number("outputTokens", "output"); const reasoningTokens = number("reasoningTokens", "reasoning"); const cacheReadTokens = number("cacheReadTokens", "cacheRead"); const cacheWriteTokens = number("cacheWriteTokens", "cacheWrite");
-  return inputTokens === undefined && outputTokens === undefined && reasoningTokens === undefined && cacheReadTokens === undefined && cacheWriteTokens === undefined ? undefined : { ...(inputTokens !== undefined ? { inputTokens } : {}), ...(outputTokens !== undefined ? { outputTokens } : {}), ...(reasoningTokens !== undefined ? { reasoningTokens } : {}), ...(cacheReadTokens !== undefined ? { cacheReadTokens } : {}), ...(cacheWriteTokens !== undefined ? { cacheWriteTokens } : {}) };
-}
-
 export default extension;
+function baselineEffort(payload: unknown): Effort | undefined { if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return undefined; const r = (payload as Record<string, unknown>).reasoning; const value = typeof r === "object" && r !== null && !Array.isArray(r) ? (r as Record<string, unknown>).effort : undefined; return typeof value === "string" && (effortValues as readonly string[]).includes(value) ? value as Effort : undefined; }
+function usageFrom(value: unknown): Usage | undefined { if (!value || typeof value !== "object" || Array.isArray(value)) return undefined; const u = value as Record<string, unknown>; const n = (...keys: string[]) => { const v = keys.map((k) => u[k]).find((x) => typeof x === "number"); return typeof v === "number" ? v : undefined; }; const inputTokens = n("inputTokens", "input"); const outputTokens = n("outputTokens", "output"); const reasoningTokens = n("reasoningTokens", "reasoning"); const cacheReadTokens = n("cacheReadTokens", "cacheRead"); const cacheWriteTokens = n("cacheWriteTokens", "cacheWrite"); return inputTokens === undefined && outputTokens === undefined && reasoningTokens === undefined && cacheReadTokens === undefined && cacheWriteTokens === undefined ? undefined : { ...(inputTokens === undefined ? {} : { inputTokens }), ...(outputTokens === undefined ? {} : { outputTokens }), ...(reasoningTokens === undefined ? {} : { reasoningTokens }), ...(cacheReadTokens === undefined ? {} : { cacheReadTokens }), ...(cacheWriteTokens === undefined ? {} : { cacheWriteTokens }) }; }
