@@ -6,6 +6,8 @@ export interface EpochSummary {
   status: TaskEpoch["status"];
   taskClass: TaskEpoch["taskClass"];
   lastActivityAt: number;
+  /** Actual effective floor at settlement; never recomputed against a later binding. */
+  effectiveRung: ResolvedRung;
 }
 
 export interface PendingInput {

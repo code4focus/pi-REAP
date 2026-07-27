@@ -175,6 +175,12 @@ describe("profile-aware provider patch layer", () => {
     expect((patched as { reasoning: { effort: string } }).reasoning.effort).toBe("xhigh");
   });
 
+  it("rejects an unissued bound-selection lookalike without falling back to legacy fields", () => {
+    const legacy = inputFor("openai-responses");
+    const original = { reasoning: { effort: "medium" } };
+    expect(patchProviderPayload({ ...legacy, boundSelection: { api: "openai-responses", effort: "low" } }, original)).toBe(original);
+  });
+
   it.each(["", { effort: "synthetic" }] as const)("fails closed for non-encodable provider value %#", (providerValue) => {
     const capability: ReasoningCapabilityProfile = {
       ...profile("openai-responses"),

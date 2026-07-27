@@ -150,6 +150,39 @@ export type ProfileBindingResult =
   | { readonly ok: true; readonly binding: ProfileBinding }
   | { readonly ok: false; readonly reason: "invalid-capability-profile" | "invalid-admission-profile" | CanonicalFailureReason };
 
+export interface CompiledProfileRouting {
+  readonly initial: Readonly<Record<InitialAdmissionKey, ResolvedRung>>;
+  readonly evidence: Readonly<Record<EvidenceAdmissionKey, ResolvedRung>>;
+  /** Exact IDs and aliases that the session-local command may choose. */
+  readonly manual: Readonly<Record<string, ResolvedRung>>;
+  /** Factory-issued provider encodings for profile-local rungs. */
+  readonly provider: Readonly<Record<string, BoundProviderSelection | undefined>>;
+}
+
+/** Exact factory-issued provider encoding; consumers must reject unissued lookalikes. */
+export interface BoundProviderSelection {
+  readonly binding: ProfileBinding;
+  readonly api: ProfileMatch["api"];
+  readonly rungId: RungId;
+  readonly ordinal: number;
+  readonly effort: string;
+}
+
+/** Detached, frozen activation material. Candidate profiles may be inspected but never activated. */
+export type ProfileActivationSnapshot =
+  | { readonly status: "ready"; readonly binding: ProfileBinding; readonly capability: ReasoningCapabilityProfile; readonly admission: AdmissionProfile; readonly routing: CompiledProfileRouting }
+  | { readonly status: "candidate" }
+  | { readonly status: "invalid" };
+
+const issuedSnapshots = new WeakSet<object>();
+const issuedProviderSelections = new WeakSet<object>();
+let bindingDigestCount = 0;
+
+/** Read-only diagnostic used by contract probes; routing must not advance it after activation preparation. */
+export function profilePreparationProbe(): Readonly<{ bindingDigests: number }> {
+  return Object.freeze({ bindingDigests: bindingDigestCount });
+}
+
 const ADMISSION_ANCHORS = ["economical", "balanced", "deliberate", "exhaustive"] as const;
 const INITIAL_KEYS = [
   "simpleQuery",
@@ -181,6 +214,14 @@ const MATCH_KEYS = [
 ] as const;
 const PROFILE_IDENTITY_KEYS = ["profileId", "profileRevision", "profileDigest"] as const;
 const SHA256 = /^[a-f0-9]{64}$/;
+const RESERVED_COMMAND_TOKENS = new Set<string>([
+  "status", "auto", "shadow", "enforce", "prototype", ...Object.getOwnPropertyNames(Object.prototype),
+]);
+
+/** True only for a profile-local identifier that cannot collide with command syntax or object built-ins. */
+export function isCommandSafeToken(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && !/\s/u.test(value) && !RESERVED_COMMAND_TOKENS.has(value);
+}
 
 export function validateCapabilityProfile(value: unknown): value is ReasoningCapabilityProfile {
   return parseCapabilityProfile(value) !== undefined;
@@ -204,6 +245,54 @@ export function createProfileBinding(
   const admission = parseAdmissionProfile(admissionValue, capability);
   if (!admission) return { ok: false, reason: "invalid-admission-profile" };
   return bindingFromValidatedProfiles(capability, admission);
+}
+
+/**
+ * Copies closed profile data before validating it, so later caller mutation and accessors cannot affect routing.
+ * This is intentionally a one-time preparation boundary; request hooks compare only the frozen result.
+ */
+export function createProfileActivationSnapshot(
+  capabilityValue: unknown,
+  admissionValue: unknown,
+): ProfileActivationSnapshot {
+  try {
+    const capabilityCopy = detachedCanonicalCopy(capabilityValue);
+    const admissionCopy = detachedCanonicalCopy(admissionValue);
+    if (capabilityCopy === undefined || admissionCopy === undefined) return issueSnapshot({ status: "invalid" });
+    const binding = createProfileBinding(capabilityCopy, admissionCopy);
+    if (!binding.ok) return issueSnapshot({ status: "invalid" });
+    const resolution = resolveProfile(
+      { match: binding.binding.match, profileBinding: binding.binding },
+      capabilityCopy,
+      admissionCopy,
+    );
+    if (resolution.status === "unapproved-profile-source") return issueSnapshot({ status: "candidate" });
+    if (resolution.status !== "resolved") return issueSnapshot({ status: "invalid" });
+    const bindingSnapshot = deepFreeze(resolution.binding);
+    const capability = deepFreeze(resolution.capability);
+    const admission = deepFreeze(resolution.admission);
+    const routing = compileRouting(capability, admission, bindingSnapshot);
+    if (!routing) return issueSnapshot({ status: "invalid" });
+    return issueSnapshot({
+      status: "ready",
+      binding: bindingSnapshot,
+      capability,
+      admission,
+      routing,
+    });
+  } catch {
+    return issueSnapshot({ status: "invalid" });
+  }
+}
+
+/** Rejects forged, mutated, or hostile objects at the runtime activation boundary. */
+export function isTrustedProfileActivationSnapshot(value: unknown): value is ProfileActivationSnapshot {
+  try { return typeof value === "object" && value !== null && issuedSnapshots.has(value) && Object.isFrozen(value); } catch { return false; }
+}
+
+/** Validates that a provider encoding came from a frozen profile activation snapshot. */
+export function isTrustedBoundProviderSelection(value: unknown): value is BoundProviderSelection {
+  try { return typeof value === "object" && value !== null && issuedProviderSelections.has(value) && Object.isFrozen(value); } catch { return false; }
 }
 
 /** Resolves exact runtime identity and both profile contents, failing closed. */
@@ -264,10 +353,67 @@ export function resolveAutomaticRung(
 export const preservesBaseline = (resolution: ProfileResolution): boolean =>
   resolution.status !== "resolved";
 
+function compileRouting(
+  capability: ReasoningCapabilityProfile,
+  admission: AdmissionProfile,
+  binding: ProfileBinding,
+): CompiledProfileRouting | undefined {
+  try {
+    const automatic = automaticRungs(capability);
+    const resolve = (selector: RungSelector): ResolvedRung | undefined => {
+      const rung = selectAutomatic(selector, capability, automatic);
+      return rung && rung.automaticEligible && !rung.explicitOnly
+        ? deepFreeze({ binding, rungId: rung.id, ordinal: rung.ordinal })
+        : undefined;
+    };
+    const initial = Object.create(null) as Record<InitialAdmissionKey, ResolvedRung>;
+    for (const key of INITIAL_KEYS) {
+      const rung = resolve(admission.initial[key]);
+      if (!rung) return undefined;
+      initial[key] = rung;
+    }
+    const evidence = Object.create(null) as Record<EvidenceAdmissionKey, ResolvedRung>;
+    for (const key of EVIDENCE_KEYS) {
+      const rung = resolve(admission.evidence[key].selector);
+      if (!rung) return undefined;
+      evidence[key] = rung;
+    }
+    const ceilingId = capability.explicitCeiling ?? capability.automaticCeiling;
+    const ceiling = capability.rungs.find((rung) => rung.id === ceilingId);
+    if (!ceiling) return undefined;
+    const manual = Object.create(null) as Record<string, ResolvedRung>;
+    const provider = Object.create(null) as Record<string, BoundProviderSelection | undefined>;
+    for (const rung of capability.rungs) {
+      if (rung.ordinal > ceiling.ordinal) continue;
+      if (!isCommandSafeToken(rung.id) || (rung.aliases ?? []).some((alias) => !isCommandSafeToken(alias))) return undefined;
+      const resolved = deepFreeze({ binding, rungId: rung.id, ordinal: rung.ordinal });
+      manual[rung.id] = resolved;
+      for (const alias of rung.aliases ?? []) manual[alias] = resolved;
+      provider[rung.id] = typeof rung.providerValue === "string" && rung.providerValue.length > 0
+        ? issueProviderSelection({ binding, api: binding.match.api, rungId: rung.id, ordinal: rung.ordinal, effort: rung.providerValue })
+        : undefined;
+    }
+    return deepFreeze({ initial, evidence, manual, provider });
+  } catch { return undefined; }
+}
+
+function issueSnapshot<T extends ProfileActivationSnapshot>(snapshot: T): T {
+  const frozen = deepFreeze(snapshot);
+  issuedSnapshots.add(frozen);
+  return frozen;
+}
+
+function issueProviderSelection<T extends BoundProviderSelection>(selection: T): T {
+  const frozen = deepFreeze(selection);
+  issuedProviderSelections.add(frozen);
+  return frozen;
+}
+
 function bindingFromValidatedProfiles(
   capability: ReasoningCapabilityProfile,
   admission: AdmissionProfile,
 ): ProfileBindingResult {
+  bindingDigestCount += 2;
   const capabilityDigest = canonicalProfileDigest(capability);
   if (!capabilityDigest.ok) return capabilityDigest;
   const admissionDigest = canonicalProfileDigest(admission);
@@ -357,6 +503,10 @@ function parseCapabilityProfile(value: unknown): ReasoningCapabilityProfile | un
       return undefined;
     }
     if (rungs.some((rung) => rung.explicitOnly && rung.ordinal < ceiling.ordinal)) return undefined;
+    const manualCeiling = explicit ?? ceiling;
+    if (rungs.some((rung) => rung.ordinal <= manualCeiling.ordinal && (!isCommandSafeToken(rung.id) || (rung.aliases ?? []).some((alias) => !isCommandSafeToken(alias))))) {
+      return undefined;
+    }
     const anchors = {} as Record<AdmissionAnchor, RungId>;
     for (const anchor of ADMISSION_ANCHORS) {
       const rungId = requiredString(anchorsRecord[anchor]);
@@ -641,6 +791,28 @@ function sameBinding(left: ProfileBinding, right: ProfileBinding): boolean {
   return sameIdentity(left.capability, right.capability)
     && sameIdentity(left.admission, right.admission)
     && sameMatch(left.match, right.match);
+}
+
+/** Fieldwise binding equality; profile-local ordinals are comparable only when true. */
+export function sameProfileBinding(left: ProfileBinding, right: ProfileBinding): boolean {
+  return sameBinding(left, right);
+}
+
+/** Fieldwise comparison used by the runtime without recomputing profile digests. */
+export function sameProfileMatch(left: ProfileMatch, right: ProfileMatch): boolean {
+  return sameMatch(left, right);
+}
+
+function detachedCanonicalCopy(value: unknown): unknown | undefined {
+  const canonical = canonicalJson(value);
+  if (!canonical.ok) return undefined;
+  try { return JSON.parse(canonical.canonical); } catch { return undefined; }
+}
+
+function deepFreeze<T>(value: T): T {
+  if (typeof value !== "object" || value === null || Object.isFrozen(value)) return value;
+  for (const key of Reflect.ownKeys(value)) deepFreeze((value as Record<PropertyKey, unknown>)[key]);
+  return Object.freeze(value);
 }
 
 function requiredString(value: unknown): string | undefined {

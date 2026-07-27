@@ -1,6 +1,7 @@
 import {
   canonicalJson,
   canonicalProfileDigest,
+  isTrustedBoundProviderSelection,
   resolveProfile,
   type DigestResult,
   type ProfileBinding,
@@ -14,10 +15,13 @@ type RecordValue = Record<string, unknown>;
 
 /** The complete, profile-bound input produced before a provider request. */
 export interface ProviderPatchInput {
-  readonly identity: unknown;
-  readonly capabilityProfile: unknown;
-  readonly admissionProfile: unknown;
-  readonly resolvedRung: unknown;
+  /** Preferred PR3 contract: factory-issued immutable exact provider selection. */
+  readonly boundSelection?: unknown;
+  /** Legacy direct PR2 contract; retained for isolated adapter contract coverage. */
+  readonly identity?: unknown;
+  readonly capabilityProfile?: unknown;
+  readonly admissionProfile?: unknown;
+  readonly resolvedRung?: unknown;
 }
 
 const isRecord = (value: unknown): value is RecordValue =>
@@ -45,6 +49,11 @@ const sameBinding = (left: ProfileBinding, right: ProfileBinding): boolean =>
 
 function resolvedProviderEffort(input: ProviderPatchInput): string | undefined {
   try {
+    if (Object.hasOwn(input, "boundSelection")) {
+      return isTrustedBoundProviderSelection(input.boundSelection) && supportsEffortRouting(input.boundSelection.api)
+        ? input.boundSelection.effort
+        : undefined;
+    }
     const resolution = resolveProfile(input.identity, input.capabilityProfile, input.admissionProfile);
     if (resolution.status !== "resolved" || !supportsEffortRouting(resolution.binding.match.api)) return undefined;
 
