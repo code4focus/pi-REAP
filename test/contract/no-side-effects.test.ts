@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { extension } from "../../src/index.js";
+import { extension, registerExtension } from "../../src/index.js";
 import { defaultConfigPaths, loadConfig } from "../../src/config/load.js";
 import { ExtensionHarness } from "../integration/extension-harness.js";
 
@@ -11,10 +11,11 @@ class StatefulFakeFileSystem {
 describe("PR 1 extension boundary", () => {
   it("does not register an LLM tool or set Pi thinking level", () => {
     const pi = new ExtensionHarness();
-    const beforeAgentStartResult = extension(pi);
+    const beforeAgentStartResult = registerExtension(pi);
     expect(pi.registerToolCalls).toEqual([]);
     expect(pi.setThinkingLevelCalls).toEqual([]);
     expect(beforeAgentStartResult).toBeUndefined();
+    expect(extension).toBe(registerExtension);
   });
 
   it("reads only effort-router configuration and never settings.json or writes", async () => {
