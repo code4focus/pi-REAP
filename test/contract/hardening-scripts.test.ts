@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, symlink, unlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -92,4 +92,20 @@ describe("v1 hardening procedures", () => {
     expect(release).toContain("git:github.com/code4focus/pi-REAP@<reviewed-commit>");
     expect(release).toContain("No tag or published release is created");
   });
+
+  it("contains no developer-home absolute path literals in executable source or tests", async () => {
+    for (const path of [
+      "src", "eval/runner", "eval/test", "test", "scripts",
+    ]) {
+      const files = await collectFiles(join(process.cwd(), path));
+      for (const file of files.filter((candidate) => /\.(?:[cm]?[jt]s|json)$/.test(candidate))) {
+        expect(await readFile(file, "utf8"), file).not.toMatch(/\/Users\/[^/]+\//);
+      }
+    }
+  });
 });
+
+async function collectFiles(root: string): Promise<string[]> {
+  const entries = await readdir(root, { withFileTypes: true });
+  return (await Promise.all(entries.map((entry) => entry.isDirectory() ? collectFiles(join(root, entry.name)) : [join(root, entry.name)]))).flat();
+}

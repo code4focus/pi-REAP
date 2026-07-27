@@ -1,11 +1,11 @@
-import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { exactTaskIds, planCalls, validateCatalog } from "../runner/live-driver.js";
 import {
-  CaptureAbortGuard, cleanupPrivateRoot, createPrivateRoot, loadInstalledPi, loadPrivateRoot, readPrivateJsonFile, validatePrivateTaskFile,
+  CaptureAbortGuard, cleanupPrivateRoot, createPrivateRoot, loadInstalledPi, loadInstalledPiResponsesShared, loadPrivateRoot, readPrivateJsonFile, validatePrivateTaskFile,
   liveUsageFromPiAssistantUsage, productionExtensionOptions, unavailableCachePrefixMeasurement, validateProductionBuild, writeFailureReceipt, writePrivate,
 } from "../runner/live-production.js";
 
@@ -25,7 +25,7 @@ describe("production live-capture offline preflight and private-root safety", ()
   });
 
   it("binds the installed Pi terminal parser to the exact production usage conversion boundary", async () => {
-    const shared = await import(pathToFileURL("/Users/ove/.local/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/api/openai-responses-shared.js").href) as { processResponsesStream: Function };
+    const shared = await loadInstalledPiResponsesShared();
     const output = { content: [], usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
     async function* fixture(): AsyncGenerator<unknown> { yield { type: "response.completed", response: { status: "completed", usage: { input_tokens: 200, input_tokens_details: { cached_tokens: 128, cache_write_tokens: 0 }, output_tokens: 2, total_tokens: 202 } } }; }
     await shared.processResponsesStream(fixture(), output, { push() {} }, { cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }, {});
@@ -50,6 +50,39 @@ describe("production live-capture offline preflight and private-root safety", ()
     });
     expect(() => validateCatalog(installed.catalog)).not.toThrow();
     expect(validateProductionBuild(process.cwd())).toMatchObject({ sourceFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/), extensionBuildFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/) });
+  });
+
+  it("fingerprints the exact project-local pnpm Pi executable without a global install", () => {
+    const originalPath = process.env.PATH;
+    process.env.PATH = [join(process.cwd(), "node_modules", ".bin"), join(tmpdir(), "synthetic-missing-bin")].join(delimiter);
+    try {
+      const installed = loadInstalledPi();
+      expect(installed.executablePath).toBe(realpathSync(join(process.cwd(), "node_modules", "@earendil-works", "pi-coding-agent", "dist", "cli.js")));
+      expect(installed.packageRoot).toContain(`${join("node_modules", ".pnpm", "@earendil-works+pi-coding-agent@0.82.1")}`);
+      expect(installed.catalog.piPackageVersion).toBe("0.82.1");
+      expect(installed.catalog.piPackageSha256).toMatch(/^[a-f0-9]{64}$/);
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH; else process.env.PATH = originalPath;
+    }
+  });
+
+  it("never returns or fingerprints an unrelated executable substituted for a local pnpm shim", () => {
+    const directory = mkdtempSync(join(tmpdir(), "pi-reap-substituted-shim-")); cleanup.push(directory);
+    const nodeModules = join(directory, "node_modules"); const bin = join(nodeModules, ".bin");
+    const packageLink = join(nodeModules, "@earendil-works", "pi-coding-agent");
+    mkdirSync(bin, { recursive: true }); mkdirSync(join(nodeModules, "@earendil-works"), { recursive: true });
+    symlinkSync(realpathSync(join(process.cwd(), "node_modules", "@earendil-works", "pi-coding-agent")), packageLink, "dir");
+    const substituted = join(bin, "pi"); copyFileSync(process.execPath, substituted); chmodSync(substituted, 0o755);
+    const substitutedSha256 = createHash("sha256").update(readFileSync(substituted)).digest("hex");
+    const originalPath = process.env.PATH; process.env.PATH = bin;
+    try {
+      const installed = loadInstalledPi();
+      expect(installed.executablePath).toBe(realpathSync(join(packageLink, "dist", "cli.js")));
+      expect(installed.executablePath).not.toBe(substituted);
+      expect(installed.catalog.piExecutableSha256).not.toBe(substitutedSha256);
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH; else process.env.PATH = originalPath;
+    }
   });
 
   it("accepts only an owner-mode-0600 six-task input outside the repository", () => {

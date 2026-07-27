@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   canonicalJson, captureStreamByteLimit, captureWallClockMs, catalogPricing, ceilingRatesMicroUsd, configuredApi, configuredModel, configuredProvider,
@@ -32,6 +32,7 @@ const piRuntimeManifest = [
 export interface InstalledPi {
   readonly executablePath: string;
   readonly packageRoot: string;
+  readonly piAiRoot: string;
   readonly packageJsonPath: string;
   readonly catalogPath: string;
   readonly catalog: CatalogModel;
@@ -45,6 +46,7 @@ export interface PrivateRoot {
 }
 
 export interface PiTerminalAssistantUsage { readonly input: number; readonly output: number; readonly cacheRead: number; readonly cacheWrite: number; readonly reasoning?: number }
+export interface PiResponsesSharedModule { readonly processResponsesStream: Function }
 /** The exact production terminal-usage boundary; raw field presence is unavailable after Pi normalization. */
 export function liveUsageFromPiAssistantUsage(assistantUsage: PiTerminalAssistantUsage): { readonly usage: UsageMetrics; readonly cacheUsageProvenance: CacheUsageProvenance } {
   const cache = recordPiAssistantUsage(assistantUsage);
@@ -72,22 +74,35 @@ export function validateProductionBuild(repositoryRoot: string): { readonly sour
 
 /** Offline only: resolves the installed executable, package, and built-in catalog without creating auth/runtime state. */
 export function loadInstalledPi(): InstalledPi {
-  const executablePath = resolveInstalledExecutable();
-  const resolvedExecutable = realpathSync(executablePath);
-  const packageRoot = dirname(dirname(resolvedExecutable));
+  const resolved = resolveInstalledExecutable();
+  const { executablePath, packageRoot, cliPath } = resolved;
+  const piAiRoot = resolveInstalledDependency(packageRoot, "@earendil-works/pi-ai");
+  const piAgentCoreRoot = resolveInstalledDependency(packageRoot, "@earendil-works/pi-agent-core");
   const packageJsonPath = join(packageRoot, "package.json");
-  const catalogPath = join(packageRoot, "node_modules", "@earendil-works", "pi-ai", "dist", "providers", "data", "openai-codex.json");
+  const catalogPath = join(piAiRoot, "dist", "providers", "data", "openai-codex.json");
   const packageBytes = readFileSync(packageJsonPath); const pkg = JSON.parse(packageBytes.toString("utf8")) as Record<string, unknown>;
-  if (pkg.name !== piPackageName || pkg.version !== piVersion || realpathSync(join(packageRoot, "dist", "cli.js")) !== resolvedExecutable) throw new Error("unsupported installed Pi runtime");
+  const bin = pkg.bin as Record<string, unknown> | undefined;
+  if (pkg.name !== piPackageName || pkg.version !== piVersion || bin?.pi !== "dist/cli.js" || realpathSync(join(packageRoot, bin.pi)) !== cliPath) throw new Error("unsupported installed Pi runtime");
+  validateInstalledPackage(piAiRoot, "@earendil-works/pi-ai");
+  validateInstalledPackage(piAgentCoreRoot, "@earendil-works/pi-agent-core");
   const catalogBytes = readFileSync(catalogPath); const data = JSON.parse(catalogBytes.toString("utf8")) as Record<string, Record<string, unknown>>;
   const model = data["openai-codex-responses"]?.["gpt-5.4-mini"] as { api?: unknown; reasoning?: unknown; cost?: Record<string, unknown> } | undefined;
   if (!model) throw new Error("configured Pi model absent from installed catalog");
   const catalog: CatalogModel = {
     id: "openai-codex/gpt-5.4-mini", api: String(model.api), reasoning: model.reasoning === true,
     ratesPerMillion: { input: Number(model.cost?.input), output: Number(model.cost?.output), cacheRead: Number(model.cost?.cacheRead), cacheWrite: Number(model.cost?.cacheWrite) },
-    piExecutableSha256: digestFile(resolvedExecutable), piPackageSha256: installedPackageFingerprint(packageRoot), piCatalogSha256: sha256(catalogBytes), piPackageVersion: piVersion,
+    piExecutableSha256: digestFile(cliPath), piPackageSha256: installedPackageFingerprint(packageRoot, piAiRoot, piAgentCoreRoot), piCatalogSha256: sha256(catalogBytes), piPackageVersion: piVersion,
   };
-  return Object.freeze({ executablePath, packageRoot, packageJsonPath, catalogPath, catalog, cachePrefixMeasurement: exactCachePrefixMeasurement() });
+  return Object.freeze({ executablePath, packageRoot, piAiRoot, packageJsonPath, catalogPath, catalog, cachePrefixMeasurement: exactCachePrefixMeasurement() });
+}
+
+/** Loads the parser only through an already fingerprint-validated Pi 0.82.1 package root. */
+export async function loadInstalledPiResponsesShared(): Promise<PiResponsesSharedModule> {
+  const installed = loadInstalledPi();
+  const modulePath = join(installed.piAiRoot, "dist", "api", "openai-responses-shared.js");
+  const loaded = await import(pathToFileURL(modulePath).href) as Partial<PiResponsesSharedModule>;
+  if (typeof loaded.processResponsesStream !== "function") throw new Error("installed Pi Responses parser is unavailable");
+  return Object.freeze({ processResponsesStream: loaded.processResponsesStream });
 }
 
 /** Explicit unavailable seam retained for fail-closed capability tests. */
@@ -344,17 +359,28 @@ interface AgentSession {
 }
 interface AssistantMessage { role: string; stopReason?: string; content: Array<{ type: string; text?: string }>; usage: { input: number; output: number; cacheRead: number; cacheWrite: number; reasoning?: number } }
 
-function resolveInstalledExecutable(): string {
-  for (const directory of (process.env.PATH ?? "").split(":")) {
+function resolveInstalledExecutable(): { readonly executablePath: string; readonly packageRoot: string; readonly cliPath: string } {
+  for (const directory of (process.env.PATH ?? "").split(delimiter)) {
     if (!directory) continue;
-    // pnpm's local shim is not the installed runtime: its parent is this
-    // repository's node_modules and cannot be fingerprinted as a Pi package.
-    // The production boundary intentionally uses the externally installed Pi.
-    if (basename(directory) === ".bin" && basename(dirname(directory)) === "node_modules") continue;
     const candidate = join(directory, "pi");
-    try { const info = statSync(candidate); if (info.isFile() && (info.mode & 0o111) !== 0) return candidate; } catch { /* continue */ }
+    let info;
+    try { info = statSync(candidate); } catch { continue; }
+    if (!info.isFile() || (info.mode & 0o111) === 0) continue;
+    if (basename(directory) === ".bin" && basename(dirname(directory)) === "node_modules") {
+      const packageRoot = realpathSync(join(dirname(directory), piPackageName));
+      const cliPath = realpathSync(join(packageRoot, "dist", "cli.js"));
+      requireExecutableFile(cliPath);
+      return Object.freeze({ executablePath: cliPath, packageRoot, cliPath });
+    }
+    const cliPath = realpathSync(candidate);
+    requireExecutableFile(cliPath);
+    return Object.freeze({ executablePath: candidate, packageRoot: dirname(dirname(cliPath)), cliPath });
   }
   throw new Error("installed Pi executable was not found");
+}
+function requireExecutableFile(path: string): void {
+  const info = statSync(path);
+  if (!info.isFile() || (info.mode & 0o111) === 0) throw new Error("installed Pi CLI is not an executable regular file");
 }
 function readSelectedEffort(directory: string): AutomaticEffort {
   const lines = readFileSync(join(directory, "decisions.jsonl"), "utf8").trim().split("\n");
@@ -377,8 +403,27 @@ function cloneJson(value: unknown): unknown {
 }
 function record(value: unknown): Record<string, unknown> { if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("provider payload is not an object"); return value as Record<string, unknown>; }
 function digestFile(path: string): string { return createHash("sha256").update(readFileSync(path)).digest("hex"); }
-function installedPackageFingerprint(root: string): string {
-  return sha256(JSON.stringify(piRuntimeManifest.map((file) => ({ file, sha256: digestFile(join(root, file)) }))));
+function installedPackageFingerprint(root: string, piAiRoot: string, piAgentCoreRoot: string): string {
+  return sha256(JSON.stringify(piRuntimeManifest.map((file) => {
+    const piAiPrefix = "node_modules/@earendil-works/pi-ai/";
+    const piAgentCorePrefix = "node_modules/@earendil-works/pi-agent-core/";
+    const path = file.startsWith(piAiPrefix) ? join(piAiRoot, file.slice(piAiPrefix.length))
+      : file.startsWith(piAgentCorePrefix) ? join(piAgentCoreRoot, file.slice(piAgentCorePrefix.length))
+        : join(root, file);
+    return { file, sha256: digestFile(path) };
+  })));
+}
+function resolveInstalledDependency(packageRoot: string, name: string): string {
+  const scopedName = name.split("/").at(-1);
+  if (!scopedName) throw new Error("invalid installed Pi dependency");
+  for (const candidate of [join(packageRoot, "node_modules", name), join(dirname(packageRoot), scopedName)]) {
+    try { return realpathSync(candidate); } catch { /* continue */ }
+  }
+  throw new Error(`installed Pi dependency is unavailable: ${name}`);
+}
+function validateInstalledPackage(root: string, name: string): void {
+  const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as Record<string, unknown>;
+  if (pkg.name !== name || pkg.version !== piVersion) throw new Error(`unsupported installed Pi dependency: ${name}`);
 }
 function readOwnedNoFollow(path: string, ownerUid: number, maxBytes: number): { readonly bytes: Buffer; readonly realPath: string } {
   if (typeof constants.O_NOFOLLOW !== "number") throw new Error("private no-follow reads are unavailable");
