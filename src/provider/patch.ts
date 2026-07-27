@@ -9,6 +9,10 @@ export interface ProviderModel {
   reasoning?: unknown;
   thinkingLevelMap?: unknown;
 }
+export type ProviderPatchStatus = "applied" | "unsupported" | "invalid_payload" | "mapping_failed";
+export type ProviderPatchOutcome =
+  | { payload: unknown; status: "applied"; originalEffort?: string; appliedEffort: string }
+  | { payload: unknown; status: "unsupported" | "invalid_payload" | "mapping_failed"; originalEffort?: string; appliedEffort?: never };
 
 type RecordValue = Record<string, unknown>;
 
@@ -72,11 +76,27 @@ export function patchProviderPayload(
   return effort === undefined ? payload : patchReasoningEffort(payload, effort);
 }
 
+/** A truthful patch result: failure outcomes retain the identical payload object. */
+export function patchProviderPayloadOutcome(model: ProviderModel | undefined, payload: unknown, desired: Effort): ProviderPatchOutcome {
+  const originalEffort = effortIn(payload);
+  if (!supportsEffortRouting(model)) return { payload, status: "unsupported", ...(originalEffort ? { originalEffort } : {}) };
+  const mapped = resolveProviderEffort(model, desired);
+  if (mapped === undefined) return { payload, status: "mapping_failed", ...(originalEffort ? { originalEffort } : {}) };
+  const patched = patchReasoningEffort(payload, mapped);
+  if (patched === payload) return { payload, status: "invalid_payload", ...(originalEffort ? { originalEffort } : {}) };
+  return { payload: patched, status: "applied", ...(originalEffort ? { originalEffort } : {}), appliedEffort: mapped };
+}
+
 /** Removes only the mutable field for structural preservation assertions. */
 export function withoutReasoningEffort(payload: unknown): unknown {
   if (!isRecord(payload) || !isRecord(payload.reasoning) || !("effort" in payload.reasoning)) return payload;
   const { effort: _effort, ...reasoning } = payload.reasoning;
   return { ...payload, reasoning };
+}
+
+function effortIn(payload: unknown): string | undefined {
+  if (!isRecord(payload) || !isRecord(payload.reasoning)) return undefined;
+  return typeof payload.reasoning.effort === "string" ? payload.reasoning.effort : undefined;
 }
 
 function canonicalize(value: unknown): string {

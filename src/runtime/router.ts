@@ -1,12 +1,13 @@
 import { createHash } from "node:crypto";
 import { higherEffort, isAutomaticEffort, type AutomaticEffort, type Effort } from "../domain/effort.js";
 import type { RoutingDecision } from "../domain/routing-decision.js";
+import type { EffortRouterConfig } from "../config/schema.js";
 import type { SessionRuntime } from "../domain/runtime-state.js";
 import type { TaskEpoch } from "../domain/task-epoch.js";
 import { classify } from "../policy/classifier.js";
 import { extractFeatures, type FeatureInput } from "../policy/features.js";
 
-export interface RouterOptions { now?: () => number; id?: () => string; resumeReason?: "resume" | "fork" | "reload" | "startup" | string }
+export interface RouterOptions { now?: () => number; id?: () => string; resumeReason?: "resume" | "fork" | "reload" | "startup" | string; config?: Pick<EffortRouterConfig, "mode" | "ambiguousEffort" | "failureEffort" | "ui"> }
 export interface StartInput extends FeatureInput {}
 
 const automaticFloor = (epoch: TaskEpoch): AutomaticEffort => {
@@ -25,26 +26,32 @@ export class EpochRouter {
   private counter = 0;
   private lastDecision?: RoutingDecision;
   private queuedInput?: StartInput;
-  private lastPromptChars = 0;
+  private readonly config: RouterOptions["config"];
 
   constructor(options: RouterOptions = {}) {
     this.now = options.now ?? Date.now;
     this.nextId = options.id ?? (() => `epoch-${++this.counter}`);
-    this.runtime = { mode: "enforce", pendingRequests: [], resumeGuard: false, sessionStartedAt: this.now() };
+    this.config = options.config;
+    this.runtime = { mode: options.config?.mode ?? "enforce", pendingRequests: [], resumeGuard: false, sessionStartedAt: this.now() };
     this.setResumeReason(options.resumeReason);
   }
 
   start(input: StartInput): RoutingDecision {
-    this.lastPromptChars = input.prompt.length;
     const features = extractFeatures(input);
     const current = this.runtime.currentEpoch;
     const previous = current ?? this.runtime.previousEpoch;
     const currentActive = current?.status === "active";
     const previousFailed = current?.status === "failed" || this.runtime.previousEpoch?.status === "failed";
-    const explicitContinuation = features.continuationSignal === true || features.streamingContinuation === true;
-    const explicitNew = features.explicitNewTask === true || (features.simpleQuestion === true && !explicitContinuation);
-    const relation: RoutingDecision["relation"] = currentActive || explicitContinuation || previousFailed ? "continuation" : (previous || this.runtime.resumeGuard) && !explicitNew ? "ambiguous" : "new";
-    const classified = classify({ features, relation, previousFailed: previousFailed === true, resumeGuard: this.runtime.resumeGuard });
+    // After settlement, only positive back-reference/retry/streaming evidence
+    // retains the prior epoch. A complete standalone goal is independent.
+    const continuationEvidence = features.continuationSignal === true || features.streamingContinuation === true;
+    const standaloneGoal = !continuationEvidence && (features.explicitNewTask === true || features.simpleQuestion === true || features.boundedRead === true || features.codeChange === true || features.testsRequested === true || features.longRunningGoal === true || features.multiStage === true || features.highRisk === true);
+    const relation: RoutingDecision["relation"] = currentActive || continuationEvidence
+      ? "continuation"
+      : standaloneGoal ? "new"
+      : (current?.status === "settled" || current?.status === "failed" || previous !== undefined || this.runtime.resumeGuard) ? "ambiguous" : "new";
+    const classified = classify({ features, relation, previousFailed: relation === "continuation" && previousFailed === true, resumeGuard: this.runtime.resumeGuard });
+    if (relation === "ambiguous" && this.config?.ambiguousEffort) classified.effort = higherEffort(classified.effort, this.config.ambiguousEffort) as AutomaticEffort;
     const inherited = relation === "new" ? undefined : current ? automaticFloor(current) : previous?.taskClass ? this.lastDecision?.selectedEffort : undefined;
     if (relation === "new" && current?.status === "settled") this.retireCurrent();
     const epoch = relation === "continuation" && current ? current : this.createEpoch(classified.effort, classified.taskClass, input.prompt, inherited);
@@ -66,14 +73,13 @@ export class EpochRouter {
   /** Holds one unmodified input only until before_agent_start consumes it. */
   queueInput(input: StartInput): void { this.queuedInput = input; }
   startQueued(): RoutingDecision | undefined { const input = this.queuedInput; delete this.queuedInput; return input ? this.start(input) : undefined; }
-  latestPromptChars(): number { return this.lastPromptChars; }
   /** Session lifecycle input; this is in-memory and never enters model history. */
   setResumeReason(reason: string | undefined): void { this.runtime.resumeGuard = ["resume", "fork", "reload", "startup"].includes(reason ?? ""); }
 
   onProviderRequest(): Effort | undefined { const epoch = this.runtime.currentEpoch; if (!epoch) return undefined; epoch.requestCount += 1; return this.effectiveEffort(epoch); }
   onToolCall(toolName: string): void { const epoch = this.runtime.currentEpoch; if (!epoch) return; epoch.toolCallCount += 1; if (toolName === "edit" || toolName === "write") this.raise("high"); }
-  onToolError(): void { const epoch = this.runtime.currentEpoch; if (!epoch) return; epoch.toolErrorCount += 1; this.raise(epoch.toolErrorCount >= 2 ? "xhigh" : "high"); }
-  onProviderEnd(stopReason: string | undefined): void { if (stopReason === "error" || stopReason === "length") { const epoch = this.runtime.currentEpoch; if (epoch) epoch.providerErrorCount += 1; this.raise("xhigh"); } }
+  onToolError(): void { const epoch = this.runtime.currentEpoch; if (!epoch) return; epoch.toolErrorCount += 1; this.raise(higherEffort(epoch.toolErrorCount >= 2 ? "xhigh" : "high", this.config?.failureEffort ?? "low") as AutomaticEffort); }
+  onProviderEnd(stopReason: string | undefined): void { if (stopReason === "error" || stopReason === "length") { const epoch = this.runtime.currentEpoch; if (epoch) epoch.providerErrorCount += 1; this.raise(higherEffort("xhigh", this.config?.failureEffort ?? "low") as AutomaticEffort); } }
   onCompaction(reason: string, willRetry: boolean): void { if (reason === "overflow" && willRetry) this.raise("xhigh"); }
   settle(failed = false): void { const epoch = this.runtime.currentEpoch; if (!epoch) return; epoch.status = failed ? "failed" : "settled"; epoch.lastActivityAt = this.now(); this.runtime.previousEpoch = { id: epoch.id, status: epoch.status, taskClass: epoch.taskClass, lastActivityAt: epoch.lastActivityAt }; }
   setManualOverride(effort: Effort | undefined): void { if (effort) this.runtime.manualOverride = { effort, scope: "session" }; else delete this.runtime.manualOverride; }
