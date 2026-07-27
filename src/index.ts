@@ -1,5 +1,12 @@
 import type { ExtensionAPI, ExtensionContext, ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import { createProfileActivationSnapshot, type ProfileActivationSnapshot, type ProfileMatch } from "./domain/profile.js";
+import {
+  createProfileActivationSnapshot,
+  inspectProfileActivation,
+  sameProfileMatch,
+  type ProfileActivationInspection,
+  type ProfileActivationSnapshot,
+  type ProfileMatch,
+} from "./domain/profile.js";
 import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
@@ -32,6 +39,25 @@ interface PreparedRuntimeActivation {
   readonly providerAdapterRevision: string;
   readonly providerAdapterDigest: string;
 }
+type ActivationState = "missing" | "invalid-attestation" | "prepared";
+type RuntimeConflictState = "session-inactive" | "active" | "profile-unavailable" | "match-conflict";
+interface ActivationDiagnostic {
+  readonly activationState: ActivationState;
+  readonly profileState: ProfileActivationInspection["profileState"] | "unavailable";
+  readonly sourceState: ProfileActivationInspection["sourceState"];
+  readonly conflict: ProfileActivationInspection["conflict"] | "missing-activation" | "invalid-attestation";
+  readonly failClosed: boolean;
+  readonly fingerprints?: ProfileActivationInspection["fingerprints"];
+  readonly sources?: ProfileActivationInspection["sources"];
+}
+interface ActivationPreparation {
+  readonly runtime?: PreparedRuntimeActivation;
+  readonly diagnostic: ActivationDiagnostic;
+}
+export interface EffortConflictDiagnostic extends ActivationDiagnostic {
+  readonly schemaVersion: 1;
+  readonly runtimeState: RuntimeConflictState;
+}
 export interface ExtensionOptions { load?: () => ReturnType<typeof loadConfig>; activation?: RuntimeAttestation; telemetryDirectory?: string; sessionId?: string; telemetryNonce?: () => string }
 const loadProductionConfig = () => loadConfig({ readFile: async (path) => {
   try { return await readFile(path, "utf8"); } catch { return undefined; }
@@ -39,7 +65,8 @@ const loadProductionConfig = () => loadConfig({ readFile: async (path) => {
 
 /** Pi 0.82.1 extension factory. Routing remains local to this extension session. */
 export const createExtension = (options: ExtensionOptions = {}): PiExtension => async (pi: ExtensionAPI) => {
-  const activation = prepareRuntimeActivation(options.activation);
+  const activationPreparation = prepareRuntimeActivation(options.activation);
+  const activation = activationPreparation.runtime;
   const config = await (options.load ?? loadProductionConfig)().catch(() => ({
     ...safeDefaults,
     telemetry: { ...safeDefaults.telemetry },
@@ -85,6 +112,13 @@ export const createExtension = (options: ExtensionOptions = {}): PiExtension => 
         if (current() && mayProductionSessionEnforce(current()!.observation()?.binding)) current()!.runtime.mode = "enforce";
       } else if (current()) parseEffortCommand(`/effort ${args}`, current()!);
       status(ctx);
+    },
+  });
+  pi.registerCommand("effort-conflict", {
+    description: "Report immutable Pi REAP activation and profile conflict state.",
+    handler: async (_args, ctx) => {
+      const diagnostic = effortConflictDiagnostic(activationPreparation.diagnostic, ctx, activation, current());
+      ctx.ui.setStatus("pi-reap-conflict", formatEffortConflictDiagnostic(diagnostic));
     },
   });
   pi.on("session_start", (event, ctx) => {
@@ -154,15 +188,37 @@ export const extension: PiExtension = createExtension();
 
 export default extension;
 
-function prepareRuntimeActivation(value: unknown): PreparedRuntimeActivation | undefined {
+function prepareRuntimeActivation(value: unknown): ActivationPreparation {
+  if (value === undefined) {
+    return Object.freeze({
+      diagnostic: Object.freeze({
+        activationState: "missing",
+        profileState: "unavailable",
+        sourceState: "unavailable",
+        conflict: "missing-activation",
+        failClosed: true,
+      }),
+    });
+  }
   const record = ownDataRecord(value, [
     "capability", "admission", "modelCatalogRevision", "modelCatalogDigest", "piVersion", "providerAdapterRevision", "providerAdapterDigest",
   ]);
   if (!record
     || typeof record.modelCatalogRevision !== "string" || typeof record.modelCatalogDigest !== "string"
-    || typeof record.piVersion !== "string" || typeof record.providerAdapterRevision !== "string" || typeof record.providerAdapterDigest !== "string") return undefined;
+    || typeof record.piVersion !== "string" || typeof record.providerAdapterRevision !== "string" || typeof record.providerAdapterDigest !== "string") {
+    return Object.freeze({
+      diagnostic: Object.freeze({
+        activationState: "invalid-attestation",
+        profileState: "unavailable",
+        sourceState: "unavailable",
+        conflict: "invalid-attestation",
+        failClosed: true,
+      }),
+    });
+  }
+  const inspection = inspectProfileActivation(record.capability, record.admission);
   const snapshot = createProfileActivationSnapshot(record.capability, record.admission);
-  return Object.freeze({
+  const runtime = Object.freeze({
     snapshot,
     modelCatalogRevision: record.modelCatalogRevision,
     modelCatalogDigest: record.modelCatalogDigest,
@@ -170,6 +226,65 @@ function prepareRuntimeActivation(value: unknown): PreparedRuntimeActivation | u
     providerAdapterRevision: record.providerAdapterRevision,
     providerAdapterDigest: record.providerAdapterDigest,
   });
+  const diagnostic = Object.freeze({
+    activationState: "prepared",
+    profileState: inspection.profileState,
+    sourceState: inspection.sourceState,
+    conflict: inspection.conflict,
+    failClosed: inspection.failClosed,
+    ...(inspection.fingerprints === undefined ? {} : { fingerprints: inspection.fingerprints }),
+    ...(inspection.sources === undefined ? {} : { sources: inspection.sources }),
+  }) satisfies ActivationDiagnostic;
+  return Object.freeze({ runtime, diagnostic });
+}
+
+function effortConflictDiagnostic(
+  activation: ActivationDiagnostic,
+  ctx: ExtensionContext,
+  prepared: PreparedRuntimeActivation | undefined,
+  router: EpochRouter | undefined,
+): EffortConflictDiagnostic {
+  let runtimeState: RuntimeConflictState;
+  if (!router) runtimeState = "session-inactive";
+  else if (!prepared || prepared.snapshot.status !== "ready") runtimeState = "profile-unavailable";
+  else {
+    const match = runtimeMatch(ctx, prepared);
+    runtimeState = match && sameProfileMatch(match, prepared.snapshot.binding.match) && router.observation()
+      ? "active"
+      : "match-conflict";
+  }
+  return Object.freeze({
+    schemaVersion: 1,
+    ...activation,
+    runtimeState,
+    failClosed: activation.failClosed || runtimeState !== "active",
+  });
+}
+
+function formatEffortConflictDiagnostic(value: EffortConflictDiagnostic): string {
+  const fields = [
+    "/effort-conflict",
+    `activation=${value.activationState}`,
+    `profile=${value.profileState}`,
+    `source=${value.sourceState}`,
+    `conflict=${value.conflict}`,
+    `runtime=${value.runtimeState}`,
+    `failClosed=${value.failClosed}`,
+  ];
+  if (value.fingerprints) {
+    fields.push(
+      `capabilityDigest=${value.fingerprints.capability}`,
+      `admissionDigest=${value.fingerprints.admission}`,
+      `matchDigest=${value.fingerprints.match}`,
+    );
+  }
+  if (value.sources) {
+    fields.push(
+      `capabilitySource=${value.sources.capability.kind}:${value.sources.capability.digest}`,
+      `admissionSource=${value.sources.admission.kind}:${value.sources.admission.digest}`,
+    );
+  }
+  return fields.join(" ");
 }
 
 function runtimeMatch(ctx: ExtensionContext, activation: PreparedRuntimeActivation | undefined): ProfileMatch | undefined {

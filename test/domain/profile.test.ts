@@ -3,6 +3,7 @@ import {
   canonicalJson,
   canonicalProfileDigest,
   createProfileBinding,
+  parseRungSelector,
   preservesBaseline,
   resolveAutomaticRung,
   resolveProfile,
@@ -108,6 +109,19 @@ function allSelectors(selector: RungSelector): AdmissionProfile["initial"] {
 }
 
 describe("closed canonical profile data", () => {
+  it("parses the exhaustive shared selector union and rejects unknown shapes", () => {
+    const selectors: readonly RungSelector[] = [
+      { kind: "lowest-automatic" },
+      { kind: "next-above-lowest" },
+      { kind: "next-below-ceiling" },
+      { kind: "automatic-ceiling" },
+      { kind: "anchor", name: "balanced" },
+    ];
+    for (const selector of selectors) expect(parseRungSelector(selector)).toEqual(selector);
+    expect(parseRungSelector({ kind: "next-above-lowest", name: "balanced" })).toBeUndefined();
+    expect(parseRungSelector({ kind: "unknown" })).toBeUndefined();
+  });
+
   it("canonicalizes valid data deterministically without key-order dependence", () => {
     expect(canonicalJson({ b: [2, { d: true, c: null }], a: 1 })).toEqual({
       ok: true,

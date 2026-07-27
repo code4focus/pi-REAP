@@ -50,6 +50,32 @@ describe("profile-aware evaluation harness", () => {
     expect(gradeDeterministically(task, { result })).toMatchObject({ accepted: false, criticalFailure: true });
   });
 
+  it("observes next-above-lowest through the real two-rung production hook and telemetry parser", async () => {
+    const executor = await PiSessionExecutor.create({});
+    const task = syntheticManifest.tasks.find((value) => value.id === "regression-two")!;
+    const selector = task.profile.admission.initial.boundedRead;
+    expect(selector).toEqual({ kind: "next-above-lowest" });
+    const expected = task.profile.capability.rungs[1]!;
+    const result = await executor.execute(task, {
+      mode: "automatic",
+      selector,
+      requestedRungId: expected.id,
+      selectorAliases: [selector],
+      scenario: { kind: "initial", admissionCase: "boundedRead", prompt: "Explain this file." },
+    });
+    expect(result.expected.provenance).toBe("synthetic-oracle");
+    expect(result.observed.kind).toBe("observed");
+    if (result.observed.kind !== "observed") return;
+    expect(result.observed.routing.selector).toEqual(selector);
+    expect(result.observed.routing.selected).toEqual({
+      rungId: expected.id,
+      ordinal: expected.ordinal,
+      providerValue: expected.providerValue,
+    });
+    expect(result.observed.routing.effective).toEqual(result.observed.routing.selected);
+    expect(result.observed.request.patchStatus).toBe("shadow");
+  });
+
   it("keeps fail-closed evidence absent instead of fabricating a baseline rung", async () => {
     const executor = await PiSessionExecutor.create({});
     const failed = syntheticManifest.tasks.filter((task) => task.mode === "regression" && task.profileState !== "resolved");

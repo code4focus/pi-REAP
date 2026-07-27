@@ -8,7 +8,9 @@ Pi REAP changes only `reasoning.effort` in supported OpenAI Responses payloads a
 
 `before_provider_request` handlers are ordered. Pi REAP's telemetry reports what this extension requested/applied locally, not the provider's final wire value. A later extension can overwrite `reasoning.effort` after Pi REAP runs.
 
-If a payload logger placed after Pi REAP locally observes a different effort, run the Pi-local command `/effort-conflict <requested-effort> <locally-observed-effort>`; for example, `/effort-conflict high low`. It directs the operator to remove the later mutator or place Pi REAP last, then re-check with that final-payload logger. This diagnostic compares local observations only and is not a claim about provider wire truth. Pi does not currently expose a final-wire observation hook to this extension.
+Run the Pi-local command `/effort-conflict` to inspect the current activation, profile, source, runtime-match, and fail-closed state. It takes no payload or prompt input and reports only closed state labels plus cryptographic profile/source/match fingerprints; it never reports prompt or user content. The command is read-only: it does not change mode, effort, profile, settings, configuration, telemetry, or provider state, and it is not an LLM-callable tool.
+
+This diagnostic reports Pi REAP's immutable local activation boundary only. It does not claim provider wire truth or inspect a later extension's payload. If a final-payload logger locally observes a later effort mutation, remove the later mutator or place Pi REAP last, then re-check with that logger.
 
 ## Release claims and gates
 

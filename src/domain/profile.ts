@@ -180,6 +180,22 @@ export type ProfileActivationSnapshot =
   | { readonly status: "candidate" }
   | { readonly status: "invalid" };
 
+export interface ProfileActivationInspection {
+  readonly profileState: "ready" | "candidate" | "invalid" | "conflicted";
+  readonly sourceState: "authorized" | "unapproved" | "conflicted" | "unavailable";
+  readonly conflict: "none" | "unapproved-source" | "invalid-profile" | "profile-reference" | "source-disagreement";
+  readonly failClosed: boolean;
+  readonly fingerprints?: {
+    readonly capability: string;
+    readonly admission: string;
+    readonly match: string;
+  };
+  readonly sources?: {
+    readonly capability: { readonly kind: ProfileSource["kind"]; readonly digest: string };
+    readonly admission: { readonly kind: ProfileSource["kind"]; readonly digest: string };
+  };
+}
+
 const issuedSnapshots = new WeakSet<object>();
 const issuedProviderSelections = new WeakSet<object>();
 let bindingDigestCount = 0;
@@ -291,6 +307,56 @@ export function createProfileActivationSnapshot(
   }
 }
 
+/** Sanitized, immutable activation diagnostic; it exposes only enum states and content fingerprints. */
+export function inspectProfileActivation(
+  capabilityValue: unknown,
+  admissionValue: unknown,
+): ProfileActivationInspection {
+  try {
+    const capabilityCopy = detachedCanonicalCopy(capabilityValue);
+    const admissionCopy = detachedCanonicalCopy(admissionValue);
+    const capability = parseCapabilityProfile(capabilityCopy);
+    if (!capability || admissionCopy === undefined) return activationInspection("invalid", "unavailable", "invalid-profile");
+    const admissionRecord = exactRecord(admissionCopy, [
+      "schemaVersion", "profileId", "profileRevision", "source", "capabilityProfileId", "capabilityProfileRevision", "initial", "evidence",
+    ]);
+    if (admissionRecord
+      && (admissionRecord.capabilityProfileId !== capability.profileId
+        || admissionRecord.capabilityProfileRevision !== capability.profileRevision)) {
+      return activationInspection("conflicted", "unavailable", "profile-reference");
+    }
+    const admission = parseAdmissionProfile(admissionCopy, capability);
+    if (!admission) return activationInspection("invalid", "unavailable", "invalid-profile");
+    const binding = bindingFromValidatedProfiles(capability, admission);
+    const matchDigest = canonicalProfileDigest(capability.match);
+    const capabilitySourceDigest = canonicalProfileDigest(capability.source);
+    const admissionSourceDigest = canonicalProfileDigest(admission.source);
+    if (!binding.ok || !matchDigest.ok || !capabilitySourceDigest.ok || !admissionSourceDigest.ok) {
+      return activationInspection("invalid", "unavailable", "invalid-profile");
+    }
+    const fingerprints = {
+      capability: binding.binding.capability.profileDigest,
+      admission: binding.binding.admission.profileDigest,
+      match: matchDigest.digest,
+    };
+    const sources = {
+      capability: { kind: capability.source.kind, digest: capabilitySourceDigest.digest },
+      admission: { kind: admission.source.kind, digest: admissionSourceDigest.digest },
+    };
+    const capabilityAuthorized = hasAdmissionAuthority(capability.source);
+    const admissionAuthorized = hasAdmissionAuthority(admission.source);
+    if ((!capabilityAuthorized || !admissionAuthorized) && !sameProfileSource(capability.source, admission.source)) {
+      return activationInspection("conflicted", "conflicted", "source-disagreement", fingerprints, sources);
+    }
+    if (!capabilityAuthorized || !admissionAuthorized) {
+      return activationInspection("candidate", "unapproved", "unapproved-source", fingerprints, sources);
+    }
+    return activationInspection("ready", "authorized", "none", fingerprints, sources);
+  } catch {
+    return activationInspection("invalid", "unavailable", "invalid-profile");
+  }
+}
+
 /** Rejects forged, mutated, or hostile objects at the runtime activation boundary. */
 export function isTrustedProfileActivationSnapshot(value: unknown): value is ProfileActivationSnapshot {
   try { return typeof value === "object" && value !== null && issuedSnapshots.has(value) && Object.isFrozen(value); } catch { return false; }
@@ -343,7 +409,7 @@ export function resolveAutomaticRung(
     if (!capability) return undefined;
     const admission = parseAdmissionProfile(admissionValue, capability);
     if (!admission) return undefined;
-    const selector = parseSelector(selectorValue);
+      const selector = parseRungSelector(selectorValue);
     if (!selector || !selectorFeasible(selector, capability)) return undefined;
     const automatic = automaticRungs(capability);
     const selected = selectAutomatic(selector, capability, automatic);
@@ -603,14 +669,14 @@ function parseAdmissionProfile(
     if (!initialRecord || !evidenceRecord) return undefined;
     const initial = {} as Record<InitialAdmissionKey, RungSelector>;
     for (const key of INITIAL_KEYS) {
-      const selector = parseSelector(initialRecord[key]);
+      const selector = parseRungSelector(initialRecord[key]);
       if (!selector || !selectorFeasible(selector, capability)) return undefined;
       initial[key] = selector;
     }
     const evidence = {} as Record<EvidenceAdmissionKey, EscalationRule>;
     for (const key of EVIDENCE_KEYS) {
       const ruleRecord = exactRecord(evidenceRecord[key], ["selector"]);
-      const selector = ruleRecord ? parseSelector(ruleRecord.selector) : undefined;
+      const selector = ruleRecord ? parseRungSelector(ruleRecord.selector) : undefined;
       if (!selector || !selectorFeasible(selector, capability)) return undefined;
       evidence[key] = { selector };
     }
@@ -629,7 +695,8 @@ function parseAdmissionProfile(
   }
 }
 
-function parseSelector(value: unknown): RungSelector | undefined {
+/** Shared closed parser for every legal profile-relative selector. */
+export function parseRungSelector(value: unknown): RungSelector | undefined {
   const kindOnly = exactRecord(value, ["kind"]);
   if (kindOnly) {
     if (
@@ -837,4 +904,27 @@ function isAdmissionAnchor(value: unknown): value is AdmissionAnchor {
 
 function hasAdmissionAuthority(source: ProfileSource): boolean {
   return source.kind === "repository-pinned" || source.kind === "user-approved-local";
+}
+
+function sameProfileSource(left: ProfileSource, right: ProfileSource): boolean {
+  const leftValue = canonicalJson(left);
+  const rightValue = canonicalJson(right);
+  return leftValue.ok && rightValue.ok && leftValue.canonical === rightValue.canonical;
+}
+
+function activationInspection(
+  profileState: ProfileActivationInspection["profileState"],
+  sourceState: ProfileActivationInspection["sourceState"],
+  conflict: ProfileActivationInspection["conflict"],
+  fingerprints?: NonNullable<ProfileActivationInspection["fingerprints"]>,
+  sources?: NonNullable<ProfileActivationInspection["sources"]>,
+): ProfileActivationInspection {
+  return deepFreeze({
+    profileState,
+    sourceState,
+    conflict,
+    failClosed: profileState !== "ready",
+    ...(fingerprints === undefined ? {} : { fingerprints }),
+    ...(sources === undefined ? {} : { sources }),
+  });
 }

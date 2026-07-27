@@ -1,8 +1,12 @@
-import type { AdmissionProfile, ReasoningCapabilityProfile } from "../../src/domain/profile.js";
+import type { AdmissionAnchor, AdmissionProfile, ReasoningCapabilityProfile, RungSelector } from "../../src/domain/profile.js";
 import type { CorpusManifest, CorpusMode, CorpusTask, ProfileFixture } from "./types.js";
 
 const match = { provider: "openai", api: "openai-responses", model: "synthetic-evaluation", modelCatalogRevision: "catalog-r1", modelCatalogDigest: "a".repeat(64), piVersion: "0.82.1", providerAdapterRevision: "adapter-r1", providerAdapterDigest: "b".repeat(64) } as const;
-const selector = (kind: "lowest-automatic" | "automatic-ceiling" | "next-below-ceiling" | "anchor", name?: "economical" | "balanced" | "deliberate" | "exhaustive") => kind === "anchor" ? { kind, name: name! } as const : { kind } as const;
+function selector(kind: Exclude<RungSelector, { readonly kind: "anchor" }>["kind"]): RungSelector;
+function selector(kind: "anchor", name: AdmissionAnchor): RungSelector;
+function selector(kind: RungSelector["kind"], name?: AdmissionAnchor): RungSelector {
+  return kind === "anchor" ? { kind, name: name! } : { kind };
+}
 function fixture(name: string, rungs: readonly { id: string; ordinal: number; value: string; automatic: boolean }[], initial: AdmissionProfile["initial"], source: ReasoningCapabilityProfile["source"] = { kind: "repository-pinned", repositoryRevision: "synthetic" }): ProfileFixture {
   const automatic = rungs.filter((r) => r.automatic);
   const capability: ReasoningCapabilityProfile = { schemaVersion: 1, profileId: `cap-${name}`, profileRevision: "r1", source, match, rungs: rungs.map((r) => ({ id: r.id, ordinal: r.ordinal, providerValue: r.value, automaticEligible: r.automatic, explicitOnly: !r.automatic })), automaticFloor: automatic[0]!.id, automaticCeiling: automatic.at(-1)!.id, ...(rungs.some((r) => !r.automatic) ? { explicitCeiling: rungs.at(-1)!.id } : {}), anchors: { economical: automatic[0]!.id, balanced: automatic[Math.min(1, automatic.length - 1)]!.id, deliberate: automatic.at(-1)!.id, exhaustive: automatic.at(-1)!.id }, baselineBehavior: "preserve-request" };
@@ -11,7 +15,7 @@ function fixture(name: string, rungs: readonly { id: string; ordinal: number; va
 }
 const allInitial = (value: AdmissionProfile["initial"]["simpleQuery"]): AdmissionProfile["initial"] => ({ simpleQuery: value, boundedRead: value, implementation: value, debugging: value, architecture: value, highRisk: value, continuation: value, unknown: value });
 export const profileFixtures = {
-  twoRung: fixture("two-rung", [{ id: "economy", ordinal: 0, value: "minimal", automatic: true }, { id: "deliberate", ordinal: 1, value: "high", automatic: true }], { ...allInitial(selector("lowest-automatic")), implementation: selector("anchor", "balanced"), continuation: selector("automatic-ceiling") }),
+  twoRung: fixture("two-rung", [{ id: "economy", ordinal: 0, value: "minimal", automatic: true }, { id: "deliberate", ordinal: 1, value: "high", automatic: true }], { ...allInitial(selector("lowest-automatic")), boundedRead: selector("next-above-lowest"), implementation: selector("anchor", "balanced"), continuation: selector("automatic-ceiling") }),
   multiRung: fixture("multi-rung", [{ id: "low", ordinal: 0, value: "minimal", automatic: true }, { id: "mid", ordinal: 1, value: "medium", automatic: true }, { id: "high", ordinal: 2, value: "high", automatic: true }, { id: "max-auto", ordinal: 3, value: "xhigh", automatic: true }, { id: "manual", ordinal: 4, value: "max", automatic: false }], { ...allInitial(selector("lowest-automatic")), implementation: selector("anchor", "balanced"), debugging: selector("anchor", "deliberate"), continuation: selector("next-below-ceiling") }),
   alias: fixture("alias", [{ id: "low", ordinal: 0, value: "minimal", automatic: true }, { id: "high", ordinal: 1, value: "high", automatic: true }], allInitial(selector("anchor", "balanced"))),
   explicitOnly: fixture("explicit-only", [{ id: "low", ordinal: 0, value: "minimal", automatic: true }, { id: "manual", ordinal: 1, value: "xhigh", automatic: false }], allInitial(selector("lowest-automatic"))),

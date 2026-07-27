@@ -15,6 +15,8 @@ describe("PR 1 extension boundary", () => {
     const pi = new ExtensionHarness();
     await createExtension({ load: async () => ({ enabled: true, mode: "shadow", ambiguousEffort: "high", failureEffort: "xhigh", telemetry: { enabled: false, includePromptText: false, directory: "synthetic" }, ui: { showStatus: false, notifyOnEscalation: false } }) })(pi.api());
     expect(pi.commands.has("effort")).toBe(true);
+    expect(pi.commands.has("effort-conflict")).toBe(true);
+    expect(pi.tools).toEqual([]);
   });
 
   it("reads only effort-router configuration and never settings.json or writes", async () => {

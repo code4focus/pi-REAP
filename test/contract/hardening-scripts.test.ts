@@ -212,6 +212,18 @@ describe("v1 hardening procedures", () => {
     expect((pkg.files as string[])).toContain("scripts/profile-check.mjs");
   });
 
+  it("packages documentation for the exact argument-free Pi-local effort-conflict command", async () => {
+    const pkg = JSON.parse(await readFile(join(process.cwd(), "package.json"), "utf8")) as { files: string[] };
+    const operations = await readFile(join(process.cwd(), "docs/OPERATIONS.md"), "utf8");
+    const extension = await readFile(join(process.cwd(), "src/index.ts"), "utf8");
+    expect(pkg.files).toContain("docs/OPERATIONS.md");
+    expect(extension).toContain('pi.registerCommand("effort-conflict"');
+    expect(operations).toContain("Run the Pi-local command `/effort-conflict`");
+    expect(operations).toContain("It takes no payload or prompt input");
+    expect(operations).not.toContain("/effort-conflict <");
+    expect(operations).not.toContain("/effort-conflict high");
+  });
+
   it("creates and inspects a real package whose built entry and packed profile commands execute", async () => {
     const packed = await execFileAsync("pnpm", ["package:check"], { cwd: process.cwd() });
     expect(packed.stdout).toContain("real pack/unpack");
