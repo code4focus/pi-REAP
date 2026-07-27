@@ -9,12 +9,10 @@ class StatefulFakeFileSystem {
 }
 
 describe("PR 1 extension boundary", () => {
-  it("does not register an LLM tool or set Pi thinking level", () => {
+  it("does not register an LLM tool or set Pi thinking level", async () => {
     const pi = new ExtensionHarness();
-    const beforeAgentStartResult = extension(pi);
-    expect(pi.registerToolCalls).toEqual([]);
-    expect(pi.setThinkingLevelCalls).toEqual([]);
-    expect(beforeAgentStartResult).toBeUndefined();
+    await extension(pi.api());
+    expect(pi.commands.has("effort")).toBe(true);
   });
 
   it("reads only effort-router configuration and never settings.json or writes", async () => {

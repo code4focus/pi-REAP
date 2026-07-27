@@ -1,56 +1,68 @@
+import type { ExtensionAPI, ExtensionContext, ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { defaultConfigPaths, loadConfig } from "./config/load.js";
 import { patchProviderPayload, type ProviderModel } from "./provider/patch.js";
 import { EpochRouter, parseEffortCommand } from "./runtime/router.js";
 
-export interface PiInput { text: string; source?: string; streamingBehavior?: "steer" | "followUp" | string }
-export interface PiRequest { payload: unknown }
-export interface PiContext { model: ProviderModel }
-export type PiSessionStartReason = "resume" | "fork" | "reload" | "startup" | "new";
-export interface PiLifecycleEvents {
-  session_start: { reason: PiSessionStartReason };
-  input: { ctx: PiContext; input: PiInput };
-  before_agent_start: { ctx: PiContext };
-  before_provider_request: { ctx: PiContext; request: PiRequest };
-  tool_call: { ctx: PiContext; toolName: string };
-  tool_execution_end: { ctx: PiContext; error?: unknown };
-  message_end: { ctx: PiContext; stopReason?: string };
-  session_compact: { ctx: PiContext; reason: string; willRetry: boolean };
-  agent_settled: { ctx: PiContext; failed?: boolean };
-}
+export type PiExtension = ExtensionFactory;
 
-export interface PiExtensionHost {
-  registerTool(definition: unknown): void;
-  setThinkingLevel(level: string): void;
-  on<E extends keyof PiLifecycleEvents>(event: E, handler: (event: PiLifecycleEvents[E]) => void | Partial<PiLifecycleEvents[E]>): void;
-  registerCommand?(command: { name: string; handler: (input: string) => unknown }): void;
-  setStatus?(status: string): void;
-}
+export interface ExtensionOptions { load?: () => ReturnType<typeof loadConfig>; }
+const loadProductionConfig = () => loadConfig({ readFile: async (path) => {
+  try { return await readFile(path, "utf8"); } catch { return undefined; }
+} }, defaultConfigPaths(homedir(), process.cwd()));
 
-export type PiExtension = (pi: PiExtensionHost) => void;
+/** Pi 0.82.1 extension factory. Routing remains local to this extension session. */
+export const createExtension = (options: ExtensionOptions = {}): PiExtension => async (pi: ExtensionAPI) => {
+  const config = await (options.load ?? loadProductionConfig)();
+  // telemetry remains an intentionally unused, read-only PR 4 seam.
+  if (!config.enabled) return;
+  let router: EpochRouter | undefined;
+  let lastRunFailed = false;
+  const current = () => router;
+  const status = (ctx: ExtensionContext) => {
+    if (config.ui.showStatus && current()) ctx.ui.setStatus("pi-reap", current()!.status());
+  };
 
-/** Registers only Pi-local commands and request-local lifecycle handlers. */
-export const extension: PiExtension = (pi) => {
-  const router = new EpochRouter();
-  const updateStatus = () => pi.setStatus?.(router.status());
-  pi.registerCommand?.({ name: "effort", handler: (input) => { const handled = parseEffortCommand(`/effort ${input}`, router); updateStatus(); return handled; } });
-  pi.on("session_start", (event) => { router.setResumeReason(event.reason); updateStatus(); });
-  pi.on("input", (event) => {
-    router.queueInput({ prompt: event.input.text, ...(event.input.source ? { source: event.input.source } : {}), ...(event.input.streamingBehavior ? { streamingBehavior: event.input.streamingBehavior } : {}) });
+  pi.registerCommand("effort", {
+    description: "Set Pi REAP effort for this session only.",
+    handler: async (args, ctx) => { if (current() && parseEffortCommand(`/effort ${args}`, current()!)) status(ctx); },
   });
-  pi.on("before_agent_start", () => {
-    router.startQueued();
-    updateStatus();
+  pi.on("session_start", (event, ctx) => {
+    // A start always replaces all state, including an explicit max override.
+    router = new EpochRouter({ resumeReason: event.reason, config });
+    lastRunFailed = false;
+    status(ctx);
   });
-  pi.on("before_provider_request", (event) => {
-    const effort = router.onProviderRequest();
-    if (effort === undefined) return undefined;
-    const payload = patchProviderPayload(event.ctx.model, event.request.payload, effort);
-    return payload === event.request.payload ? undefined : { request: { ...event.request, payload } };
+  pi.on("session_shutdown", (_event, ctx) => {
+    router = undefined;
+    lastRunFailed = false;
+    if (config.ui.showStatus) ctx.ui.setStatus("pi-reap", undefined);
   });
-  pi.on("tool_call", (event) => { router.onToolCall(event.toolName); updateStatus(); });
-  pi.on("tool_execution_end", (event) => { if (event.error !== undefined) router.onToolError(); updateStatus(); });
-  pi.on("message_end", (event) => { router.onProviderEnd(event.stopReason); updateStatus(); });
-  pi.on("session_compact", (event) => { router.onCompaction(event.reason, event.willRetry); updateStatus(); });
-  pi.on("agent_settled", (event) => { router.settle(event.failed === true); updateStatus(); });
+  pi.on("input", (event) => { current()?.queueInput({ prompt: event.text, source: event.source, ...(event.streamingBehavior ? { streamingBehavior: event.streamingBehavior } : {}) }); });
+  pi.on("before_agent_start", (_event, ctx) => { current()?.startQueued(); status(ctx); });
+  pi.on("before_provider_request", (event, ctx) => {
+    const effort = current()?.onProviderRequest();
+    if (effort === undefined || current()?.runtime.mode !== "enforce") return undefined;
+    const payload = patchProviderPayload(ctx.model as ProviderModel | undefined, event.payload, effort);
+    return payload === event.payload ? undefined : payload;
+  });
+  pi.on("tool_call", (event, ctx) => { current()?.onToolCall(event.toolName); status(ctx); });
+  pi.on("tool_execution_end", (event, ctx) => { if (event.isError) { const before = current()?.effectiveEffort(); current()?.onToolError(); if (config.ui.notifyOnEscalation && before !== undefined && current()?.effectiveEffort() !== before) ctx.ui.notify("Pi REAP raised effort after a tool failure", "warning"); } status(ctx); });
+  pi.on("message_end", (event, ctx) => {
+    if (event.message.role === "assistant") {
+      const failed = event.message.stopReason === "error" || event.message.stopReason === "length";
+      lastRunFailed = failed;
+      const before = current()?.effectiveEffort(); current()?.onProviderEnd(event.message.stopReason);
+      if (failed && config.ui.notifyOnEscalation && before !== undefined && current()?.effectiveEffort() !== before) ctx.ui.notify("Pi REAP raised effort after an assistant failure", "warning");
+    }
+    status(ctx);
+  });
+  pi.on("session_compact", (event, ctx) => { current()?.onCompaction(event.reason, event.willRetry); status(ctx); });
+  // Pi 0.82.1 agent_settled is fieldless; settle only the recorded terminal result.
+  pi.on("agent_settled", (_event, ctx) => { current()?.settle(lastRunFailed); lastRunFailed = false; status(ctx); });
 };
+
+export const extension: PiExtension = createExtension();
 
 export default extension;
