@@ -14,8 +14,8 @@ export function summarizeEvaluation(manifest: CorpusManifest, runs: readonly Eva
   for (const run of runs) { const mode = byMode[run.mode] ??= empty(); add(mode, run); const strata = byTaskClass[run.taskClass] ??= {}; const classMode = strata[run.mode] ??= empty(); add(classMode, run); }
   const oracleByTask: Record<string, AutomaticEffort | "unresolved"> = {};
   for (const task of manifest.tasks) { const accepted = runs.filter((run) => run.taskId === task.id && run.grade.accepted).map((run) => run.result.selectedEffort).sort((a, b) => rank[a]! - rank[b]!); const lowest = accepted.at(0); oracleByTask[task.id] = lowest ?? "unresolved"; }
-  const policy = byMode.policy ?? empty(); const xhigh = byMode["fixed-xhigh"] ?? empty();
-  const policyRuns = runs.filter((run) => run.mode === "policy"); const under = policyRuns.filter((run) => { const oracle = oracleByTask[run.taskId] ?? "unresolved"; return oracle !== "unresolved" && rank[run.result.selectedEffort]! < rank[oracle]!; }).length;
+  const policy = byMode["policy-enforce"] ?? empty(); const xhigh = byMode["fixed-xhigh"] ?? empty();
+  const policyRuns = runs.filter((run) => run.mode === "policy-enforce"); const under = policyRuns.filter((run) => { const oracle = oracleByTask[run.taskId] ?? "unresolved"; return oracle !== "unresolved" && rank[run.result.selectedEffort]! < rank[oracle]!; }).length;
   const xhighSuccess = xhigh.successes; const policySuccess = policy.successes;
   return { byMode, byTaskClass, oracleByTask, underRoutingRate: policyRuns.length === 0 ? 0 : under / policyRuns.length, qualityRegretVsXhigh: xhighSuccess === 0 ? 0 : (xhighSuccess - policySuccess) / xhighSuccess, requestAmplificationVsXhigh: policy.providerRequests - xhigh.providerRequests, cacheWriteAmplificationVsXhigh: policy.cacheWriteTokens - xhigh.cacheWriteTokens };
 }

@@ -15,7 +15,7 @@ describe("evaluation harness", () => {
     const seen: ExecutionRequest[] = [];
     const recordingExecutor: EvaluationExecutor = { execute: async (task, request) => { seen.push(request); return executor.execute(task, request); } };
     const runs = await runEvaluation(syntheticManifest, recordingExecutor, { corpusMode: "regression", repetitions: 2 });
-    expect(runs).toHaveLength(5 * 3 * 2);
+    expect(runs).toHaveLength(6 * 4 * 2);
     expect(seen.filter((request) => request.mode === "fixed-xhigh").every((request) => request.requestedEffort === "xhigh")).toBe(true);
     expect(seen.filter((request) => request.mode === "fixed-high").every((request) => request.requestedEffort === "high")).toBe(true);
     expect(runs.find((run) => run.mode === "fixed-xhigh")!.effectiveCostMicros).toBe(252);
@@ -43,7 +43,7 @@ describe("evaluation harness", () => {
     const runs = await runEvaluation(syntheticManifest, executor, { corpusMode: "regression", repetitions: 1 });
     const metrics = summarizeEvaluation(syntheticManifest, runs);
     expect(metrics.oracleByTask["regression-implementation"]).toBe("high");
-    expect(metrics.byMode["fixed-xhigh"]!.toolRounds).toBe(10);
+    expect(metrics.byMode["fixed-xhigh"]!.toolRounds).toBe(12);
     const [a, b] = syntheticCacheCrossover;
     expect(assessCrossover(a!).crossoverRead).toBe(true);
     expect(assessCrossover(b!).crossoverWrite).toBe(true);
@@ -53,7 +53,7 @@ describe("evaluation harness", () => {
     expect(() => validateHumanReviewDecisions([{ ...review, taskId: "fabricated" }], runs)).toThrow("does not match");
     expect(() => validateHumanReviewDecisions([{ ...review, runId: "fabricated" }], runs)).toThrow("unknown run");
     const report = renderMarkdownReport(syntheticManifest, runs, metrics, syntheticCacheCrossover, [review]);
-    for (const required of ["fixed-xhigh", "fixed-high", "policy", "tool rounds", "cache read", "cache write", "provider requests", "retries", "effective cost", "Task-class strata", "Outcome oracle", "Traceable human review", "reduced reasoning/output cost", "synthetic sample"]) expect(report).toContain(required);
+    for (const required of ["fixed-xhigh", "fixed-high", "policy-shadow", "policy-enforce", "tool rounds", "cache read", "cache write", "provider requests", "retries", "effective cost", "Task-class strata", "Outcome oracle", "Traceable human review", "reduced reasoning/output cost", "synthetic sample"]) expect(report).toContain(required);
     expect(report).toContain("synthetic fixtures only");
     expect(report).not.toContain("release benefit");
   });

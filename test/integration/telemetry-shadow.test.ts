@@ -21,7 +21,7 @@ describe("telemetry and shadow mode (synthetic lifecycle coverage)", () => {
   });
 
   it("records correlated redacted decision, request, and epoch records", () => {
-    const path = directory(); const harness = new ExtensionHarness(); createExtension({ telemetryDirectory: path, sessionId: "synthetic-session" })(harness);
+    const path = directory(); const harness = new ExtensionHarness(); createExtension({ telemetryDirectory: path, sessionId: "synthetic-session", mode: "enforce" })(harness);
     harness.emit("input", { ctx, input: { text: "Do not persist this secret prompt", source: "interactive" } });
     harness.emit("before_agent_start", { ctx });
     const result = harness.emit("before_provider_request", { ctx, request: { payload: { input: "secret prompt", tools: [{ name: "private" }], reasoning: { summary: "none" } } } });

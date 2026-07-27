@@ -6,7 +6,7 @@ import type { EvaluationExecutor, EvaluationMode, EvaluationRun, ExecutionReques
 
 export interface RunnerOptions { readonly modes?: readonly Exclude<EvaluationMode, "candidate">[]; readonly repetitions: number; readonly corpusMode?: CorpusMode; readonly pricing?: TokenPricing }
 export interface CandidateMatrixOptions { readonly corpusMode: "smoke" | "calibration"; readonly repetitions?: number; readonly pricing?: TokenPricing }
-const requiredModes = ["fixed-xhigh", "fixed-high", "policy"] as const;
+const requiredModes = ["fixed-xhigh", "fixed-high", "policy-shadow", "policy-enforce"] as const;
 const fixedEffort: Record<"fixed-xhigh" | "fixed-high", AutomaticEffort> = { "fixed-xhigh": "xhigh", "fixed-high": "high" };
 
 function requestFor(mode: EvaluationMode, effort?: AutomaticEffort): ExecutionRequest {
@@ -19,7 +19,7 @@ async function executeRun(task: CorpusTask, executor: EvaluationExecutor, mode: 
   return { id: `${task.id}:${mode}:${candidateEffort ?? "policy"}:${repetition}`, taskId: task.id, taskClass: task.taskClass, mode, repetition, result, effectiveCostMicros: effectiveCostMicros(result.usage, pricing), grade: gradeDeterministically(task, result.output, result.selectedEffort) };
 }
 
-/** Runs every required fixed baseline and policy comparison, repeatedly. */
+/** Runs every required fixed baseline plus shadow and enforce comparisons. */
 export async function runEvaluation(manifest: CorpusManifest, executor: EvaluationExecutor, options: RunnerOptions): Promise<EvaluationRun[]> {
   const modes = options.modes ?? requiredModes;
   if (!requiredModes.every((mode) => modes.includes(mode))) throw new Error("evaluation must compare fixed-xhigh, fixed-high, and policy");

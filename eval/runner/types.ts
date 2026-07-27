@@ -3,7 +3,12 @@ import type { TaskClass } from "../../src/domain/task-epoch.js";
 import type { CorpusTask } from "../corpus/types.js";
 import type { Grade } from "../graders/deterministic.js";
 
-export type EvaluationMode = "fixed-xhigh" | "fixed-high" | "policy" | "candidate";
+/**
+ * Shadow and enforce are deliberately separate observations: only enforce is
+ * permitted to alter a provider request.  Keeping them distinct prevents a
+ * shadow recommendation from being presented as an applied effort.
+ */
+export type EvaluationMode = "fixed-xhigh" | "fixed-high" | "policy-shadow" | "policy-enforce" | "candidate";
 export interface UsageMetrics { inputTokens: number; uncachedInputTokens: number; outputTokens: number; reasoningTokens: number; cacheReadTokens: number; cacheWriteTokens: number }
 export interface ExecutionRequest { readonly mode: EvaluationMode; readonly requestedEffort?: AutomaticEffort }
 /** An executor reports observations; it never supplies the authoritative cost. */

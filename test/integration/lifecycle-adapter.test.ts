@@ -7,7 +7,7 @@ import { withoutReasoningEffort } from "../../src/provider/patch.js";
 import { ExtensionHarness, type SyntheticContext } from "./extension-harness.js";
 
 const ctx: SyntheticContext = { model: { id: "synthetic", provider: "openai", api: "openai-responses", reasoning: true } };
-const extension = (pi: PiExtensionHost) => createExtension({ telemetryDirectory: mkdtempSync(join(tmpdir(), "pi-reap-lifecycle-")) })(pi);
+const extension = (pi: PiExtensionHost) => createExtension({ telemetryDirectory: mkdtempSync(join(tmpdir(), "pi-reap-lifecycle-")), mode: "enforce" })(pi);
 
 describe("typed lifecycle adapter", () => {
   it.each(["continue", "fix it"])("routes a %s after session resume to xhigh and patches request-locally", (text) => {

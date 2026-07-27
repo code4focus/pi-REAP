@@ -29,11 +29,12 @@ export interface PiExtensionHost {
 }
 
 export type PiExtension = (pi: PiExtensionHost) => void;
-export interface ExtensionOptions { telemetryDirectory?: string; sessionId?: string }
+/** Local, non-persisted startup controls. Invalid input falls back to shadow. */
+export interface ExtensionOptions { telemetryDirectory?: string; sessionId?: string; mode?: unknown }
 
 /** Registers only Pi-local commands and request-local lifecycle handlers. */
 export const createExtension = (options: ExtensionOptions = {}): PiExtension => (pi) => {
-  const router = new EpochRouter();
+  const router = new EpochRouter({ mode: initialMode(options.mode) });
   const telemetry = new TelemetryRuntime(new TelemetryWriter({ ...(options.telemetryDirectory ? { directory: options.telemetryDirectory } : {}), ...(options.sessionId ? { sessionId: options.sessionId } : {}) }));
   let pendingDecision: { decision: RoutingDecision; promptChars: number } | undefined;
   const updateStatus = (context?: PiContext) => context?.ui?.setStatus("effort-router", `${router.status()}\n${telemetry.writer.status()}`);
@@ -86,6 +87,10 @@ export const createExtension = (options: ExtensionOptions = {}): PiExtension => 
 
 /** The production entry point writes only redacted observation records. */
 export const extension: PiExtension = createExtension();
+
+function initialMode(value: unknown): "shadow" | "enforce" {
+  return value === "enforce" || value === "shadow" ? value : "shadow";
+}
 
 function baselineEffort(payload: unknown): Effort | undefined {
   if (typeof payload === "object" && payload !== null && !Array.isArray(payload)) {

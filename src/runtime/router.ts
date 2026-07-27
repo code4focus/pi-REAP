@@ -6,7 +6,7 @@ import type { TaskEpoch } from "../domain/task-epoch.js";
 import { classify } from "../policy/classifier.js";
 import { extractFeatures, type FeatureInput } from "../policy/features.js";
 
-export interface RouterOptions { now?: () => number; id?: () => string; resumeReason?: "resume" | "fork" | "reload" | "startup" | string }
+export interface RouterOptions { now?: () => number; id?: () => string; resumeReason?: "resume" | "fork" | "reload" | "startup" | string; mode?: "shadow" | "enforce" }
 export interface StartInput extends FeatureInput {}
 
 const automaticFloor = (epoch: TaskEpoch): AutomaticEffort => {
@@ -30,7 +30,7 @@ export class EpochRouter {
   constructor(options: RouterOptions = {}) {
     this.now = options.now ?? Date.now;
     this.nextId = options.id ?? (() => `epoch-${++this.counter}`);
-    this.runtime = { mode: "enforce", pendingRequests: [], resumeGuard: false, sessionStartedAt: this.now() };
+    this.runtime = { mode: options.mode ?? "shadow", pendingRequests: [], resumeGuard: false, sessionStartedAt: this.now() };
     this.setResumeReason(options.resumeReason);
   }
 
