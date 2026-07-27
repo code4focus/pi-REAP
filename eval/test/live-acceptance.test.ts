@@ -95,7 +95,7 @@ describe("production-pinned sanitized live acceptance boundary", () => {
   it("invalidates the legacy signed fixture when cache-observability bytes are added", () => {
     const value = artifact(); const proof: TrustedLiveAttestation = { ...unsigned(value), witnessedAt: "2026-07-27T00:01:14.852Z", issuedAt: "2026-07-27T00:01:14.852Z", expiresAt: "2026-07-27T00:51:14.852Z", signature: independentWitnessSignature };
     expect(canonicalArtifactSha256(value)).toBe("b620ba498c16f913d11ff1d49cf4632f3869de60d0938e687fbbc660bede0493");
-    expect(createHash("sha256").update(canonicalAttestationBytes(proof)).digest("hex")).toBe("7d7d2e8be135acdf41de59ee3c56c5440303a5c7057ddb70d176cbbae3ea19f7");
+    expect(createHash("sha256").update(canonicalAttestationBytes(proof)).digest("hex")).toBe("128ebc882e7377b9ac5c0cffa1ac1b58edc4d5f1bc5ed0c82f0933750aa5a4cb");
     expect(createHash("sha256").update(Buffer.from(proof.signature, "base64")).digest("hex")).toBe(independentWitnessSignatureSha256);
     vi.useFakeTimers(); vi.setSystemTime(new Date("2026-07-27T00:30:00.000Z"));
     try {

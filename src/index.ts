@@ -1,4 +1,4 @@
-import { patchProviderPayload, type ProviderModel } from "./provider/patch.js";
+import { diagnoseLaterEffortMutator, patchProviderPayload, type ProviderModel } from "./provider/patch.js";
 import { effortValues, type Effort } from "./domain/effort.js";
 import { EpochRouter, parseEffortCommand } from "./runtime/router.js";
 import { TelemetryRuntime, type Usage } from "./telemetry/runtime.js";
@@ -39,6 +39,10 @@ export const createExtension = (options: ExtensionOptions = {}): PiExtension => 
   let pendingDecision: { decision: RoutingDecision; promptChars: number } | undefined;
   const updateStatus = (context?: PiContext) => context?.ui?.setStatus("effort-router", `${router.status()}\n${telemetry.writer.status()}`);
   pi.registerCommand("effort", { description: "Show or change local effort routing", handler: (input, context) => { parseEffortCommand(`/effort ${input}`, router); updateStatus(context); } });
+  pi.registerCommand("effort-conflict", { description: "Diagnose a locally observed later reasoning.effort mutation", handler: (input, context) => {
+    const values = input.trim().split(/\s+/); const diagnostic = values.length === 2 ? diagnoseLaterEffortMutator(values[0], values[1]) : undefined;
+    context.ui?.setStatus("effort-router", diagnostic?.message ?? "Usage: /effort-conflict <requested-effort> <locally-observed-effort>. This compares local observations only, not provider wire truth.");
+  } });
   pi.on("session_start", (event, context) => { router.setResumeReason(event.reason); updateStatus(context); });
   pi.on("input", (event) => {
     const input = event.input;

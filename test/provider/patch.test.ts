@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   canonicalPayloadHash,
+  diagnoseLaterEffortMutator,
   patchProviderPayload,
   patchReasoningEffort,
   resolveProviderEffort,
@@ -57,6 +58,17 @@ describe("provider patch layer", () => {
     const payload = { reasoning: { effort: "high" } };
     expect(patchProviderPayload({ api: "other", reasoning: true }, payload, "low")).toBe(payload);
     expect(patchReasoningEffort(payload, "")).toBe(payload);
+  });
+
+  it("reports later effort-mutator conflicts without claiming wire truth", () => {
+    expect(diagnoseLaterEffortMutator("high", "high")).toBeUndefined();
+    expect(diagnoseLaterEffortMutator(undefined, "low")).toBeUndefined();
+    expect(diagnoseLaterEffortMutator("high", "low")).toEqual({
+      code: "later_effort_mutator",
+      expectedEffort: "high",
+      observedEffort: "low",
+      message: expect.stringContaining("place Pi REAP last"),
+    });
   });
 
   it("creates only the requested effort when supported payload reasoning is absent", () => {

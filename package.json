@@ -11,17 +11,26 @@
     "eval:build": "tsc -p eval/tsconfig.json",
     "eval:typecheck": "tsc -p eval/tsconfig.json --noEmit",
     "eval:sample": "vitest run eval/test/sample-report.test.ts",
-    "eval:live:dry-run": "pnpm eval:build && node scripts/live-acceptance-driver.mjs"
+    "eval:live:dry-run": "pnpm eval:build && node scripts/live-acceptance-driver.mjs",
+    "fixtures:verify": "node scripts/verify-pi-fixtures.mjs",
+    "release:check": "pnpm fixtures:verify && node scripts/release-check.mjs --dry-run",
+    "rollback:check": "node scripts/rollback-check.mjs --dry-run"
   },
   "dependencies": {
     "@sinclair/typebox": "^0.34.41",
     "js-tiktoken": "1.0.21"
   },
   "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.82.1",
     "@types/node": "^24.0.0",
     "oxlint": "^1.23.0",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"
   },
-  "packageManager": "pnpm@10.32.1"
+  "packageManager": "pnpm@10.32.1",
+  "piReapCompatibility": {
+    "piCodingAgent": "@earendil-works/pi-coding-agent@0.82.1",
+    "upstreamCommit": "cee5ff7520d8828bed9955ef00419e995d1f91e0",
+    "upgradePolicy": "Run pnpm fixtures:verify and the full release gate before changing this pin."
+  }
 }

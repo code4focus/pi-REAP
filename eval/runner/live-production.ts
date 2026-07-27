@@ -335,6 +335,10 @@ interface AssistantMessage { role: string; stopReason?: string; content: Array<{
 function resolveInstalledExecutable(): string {
   for (const directory of (process.env.PATH ?? "").split(":")) {
     if (!directory) continue;
+    // pnpm's local shim is not the installed runtime: its parent is this
+    // repository's node_modules and cannot be fingerprinted as a Pi package.
+    // The production boundary intentionally uses the externally installed Pi.
+    if (basename(directory) === ".bin" && basename(dirname(directory)) === "node_modules") continue;
     const candidate = join(directory, "pi");
     try { const info = statSync(candidate); if (info.isFile() && (info.mode & 0o111) !== 0) return candidate; } catch { /* continue */ }
   }

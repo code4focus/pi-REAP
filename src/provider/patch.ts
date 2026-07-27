@@ -10,6 +10,13 @@ export interface ProviderModel {
   thinkingLevelMap?: unknown;
 }
 
+export interface EffortMutationConflict {
+  code: "later_effort_mutator";
+  expectedEffort: string;
+  observedEffort: string;
+  message: string;
+}
+
 type RecordValue = Record<string, unknown>;
 
 const isRecord = (value: unknown): value is RecordValue =>
@@ -70,6 +77,25 @@ export function patchProviderPayload(
 ): unknown {
   const effort = resolveProviderEffort(model, desired);
   return effort === undefined ? payload : patchReasoningEffort(payload, effort);
+}
+
+/**
+ * Makes an observed post-router effort mismatch actionable without claiming it
+ * is the provider's final wire payload. A payload logger installed after this
+ * extension may supply `observedEffort`; Pi does not expose an equivalent
+ * final-wire observation hook to this extension.
+ */
+export function diagnoseLaterEffortMutator(
+  expectedEffort: string | undefined,
+  observedEffort: string | undefined,
+): EffortMutationConflict | undefined {
+  if (expectedEffort === undefined || observedEffort === undefined || expectedEffort === observedEffort) return undefined;
+  return {
+    code: "later_effort_mutator",
+    expectedEffort,
+    observedEffort,
+    message: `Local observation: reasoning.effort ${JSON.stringify(observedEffort)} after Pi REAP requested ${JSON.stringify(expectedEffort)}. This is not provider wire truth. Another later before_provider_request mutator may own the final value; remove it or place Pi REAP last, then verify with a final-payload logger.`,
+  };
 }
 
 /** Removes only the mutable field for structural preservation assertions. */

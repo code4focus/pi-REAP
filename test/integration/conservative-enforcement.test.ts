@@ -63,6 +63,17 @@ describe("PR 6 conservative enforcement (synthetic lifecycle coverage)", () => {
     }
   });
 
+  it("registers a Pi-local conflict command with explicit local-not-wire guidance", async () => {
+    const harness = new ExtensionHarness(); createExtension({ telemetryDirectory: directory() })(harness);
+    expect(harness.registerToolCalls).toEqual([]);
+    const messages: string[] = []; const context = { ui: { setStatus(_key: string, value: string | undefined) { messages.push(value ?? ""); } } };
+    await harness.commands.get("effort-conflict")!.handler("high low", context);
+    expect(messages.at(-1)).toContain("place Pi REAP last"); expect(messages.at(-1)).toContain("final-payload logger"); expect(messages.at(-1)).toContain("Local observation"); expect(messages.at(-1)).toContain("not provider wire truth");
+    await harness.commands.get("effort-conflict")!.handler("bad", context);
+    expect(messages.at(-1)).toContain("local observations only, not provider wire truth");
+    expect(harness.setThinkingLevelCalls).toEqual([]);
+  });
+
   it("leaves unsupported and conflicted requests unchanged as the baseline fallback", () => {
     for (const ctx of [
       { model: { id: "unsupported", provider: "other", api: "other", reasoning: true } },
