@@ -91,7 +91,7 @@ A cross-PR reuse is allowed only when the root records a concrete continuity ben
 
 ## 6. Context routing
 
-Use the hash-pinned packet at `docs/harness/pr-scopes/pr-NN.md` as the normal context boundary for one plan PR.
+Use the hash-pinned successor packet at `docs/harness/profile-pr-scopes/pr-NN.md` as the normal context boundary for one profile-revision plan PR. The predecessor `pr-scopes/` and `pr-evidence/` series are historical archives and are not routine context.
 
 Resolve it before dispatch:
 
@@ -99,11 +99,11 @@ Resolve it before dispatch:
 bash .agents/skills/orchestrate-pi-reap-goal/scripts/resolve_pr_scope.sh <PR-number>
 ```
 
-The resolver verifies the packet's PR identity and `source_plan_sha256` against the authoritative frozen plan. A missing or stale packet blocks routine dispatch.
+The resolver verifies packet version, source identity, PR identity, and `source_plan_sha256` against the authoritative successor plan. A missing or stale packet blocks routine dispatch.
 
 | Role | Load normally | Load only on exception | Do not preload |
 | --- | --- | --- | --- |
-| Root coordinator | `AGENTS.md`, orchestration skill, dispatch policy, current goal-state record, current packet path/hash | Named plan range for packet repair or dispute; blocker ledger for an open/terminal blocker | Other PR packets |
+| Root coordinator | `AGENTS.md`, orchestration skill, current declarations/boundary/ledger/blockers from the goal-state record, current packet path/hash | Dispatch-policy section needed for a routing dispute; named plan range for packet repair or dispute; completed-PR evidence or history needed for acceptance | Other PR packets and unrelated history |
 | Execution worker | `AGENTS.md`, implementation skill, current packet, task envelope, targeted code/tests | Current packet's named plan range | Full plan, dispatch policy, blocker ledger, other packets |
 | Assurance worker | `AGENTS.md`, review skill, current packet, raw diff/evidence, targeted code/tests | Current packet's named plan range | Full plan, dispatch policy, blocker ledger, executor narrative, other packets |
 | Publication task | Current packet, PR template, reviewed evidence, exact Git/GitHub state | Required release artifact | Full plan and unrelated harness docs |
@@ -122,7 +122,9 @@ If packet resolution fails:
 
 The plan remains authoritative. Hash validation prevents a derived packet from silently surviving a plan change; it does not make the packet a new source of product truth.
 
-Keep `docs/harness/v1-goal-state.md` current as the durable process authority. Record controlling declarations, current PR and leases, accepted evidence, harness optimizations, and blockers. Update it before dispatching work affected by a new declaration. Do not rely on conversation history as the sole source for an acceptance-relevant decision.
+Keep `docs/harness/v1-goal-state.md` current as the compact process authority. Record controlling declarations, current PR and leases, accepted conclusions and links, harness optimizations, and blockers. Move completed successor-PR detail to `docs/harness/profile-pr-evidence/` and chronological events to `docs/harness/v1-goal-history.md`; those files are on-demand evidence, not normal context. Predecessor evidence remains historical. Update the current record before dispatching work affected by a new declaration. Do not rely on conversation history as the sole source for an acceptance-relevant decision.
+
+Run `.agents/skills/orchestrate-pi-reap-goal/scripts/check_context_budget.sh` after material harness changes and at every PR boundary. The root may compact or rewrite auto-loaded harness during the goal when doing so reduces context cost without changing authority, frozen semantics, acceptance conclusions, unresolved risks, hashes, or evidence traceability. Prefer removing duplication and splitting on-demand evidence over raising a budget. Never make routine workers load an archive to reconstruct current instructions.
 
 ## 7. Dispatch settings
 

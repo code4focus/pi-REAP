@@ -1,4 +1,4 @@
-import type { AutomaticEffort } from "./effort.js";
+import type { ResolvedRung } from "./profile.js";
 
 export type EpochStatus = "active" | "settled" | "failed" | "retired";
 
@@ -18,9 +18,9 @@ export interface TaskEpoch {
   lastActivityAt: number;
   status: EpochStatus;
   taskClass: TaskClass;
-  initialEffort: AutomaticEffort;
-  inheritedFloor?: AutomaticEffort;
-  escalationFloor?: AutomaticEffort;
+  initialRung: ResolvedRung;
+  inheritedFloor?: ResolvedRung;
+  escalationFloor?: ResolvedRung;
   requestCount: number;
   toolCallCount: number;
   toolErrorCount: number;
