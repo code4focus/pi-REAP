@@ -58,7 +58,7 @@ Do not send the full goal-state document to routine workers. Require PR-readines
 
 ## Maintain the context budget
 
-Run `scripts/check_context_budget.sh` after material harness changes and at every PR boundary. If an auto-loaded file approaches its budget, compact it before the next dispatch. Move completed-PR detail to `docs/harness/pr-evidence/`, move chronological events to `docs/harness/v1-goal-history.md`, and keep only current declarations, the active boundary, the compact PR ledger, live blockers, and links in the goal-state record.
+Run `scripts/check_context_budget.sh` after material harness changes and at every PR boundary. If an auto-loaded file approaches its budget, compact it before the next dispatch. Move completed successor-PR detail to `docs/harness/profile-pr-evidence/`, move chronological events to `docs/harness/v1-goal-history.md`, and keep only current declarations, the active boundary, the compact PR ledger, live blockers, and links in the goal-state record. Predecessor evidence remains historical.
 
 Permit the root to edit loaded harness during the goal to remove stale or duplicated routing text. Preserve hashes, live authority, acceptance conclusions, unresolved risks, and evidence links. Never replace evidence with a summary that cannot lead an acceptance reviewer back to the raw artifact.
 

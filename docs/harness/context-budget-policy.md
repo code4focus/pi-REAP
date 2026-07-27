@@ -22,7 +22,7 @@ Run `.agents/skills/orchestrate-pi-reap-goal/scripts/check_context_budget.sh` af
 
 1. Preserve the frozen plan as product authority; never shorten or rewrite it as context optimization.
 2. Keep current declarations, active boundary, compact PR ledger, current leases, unresolved blockers, and evidence links in the goal-state record.
-3. Move completed-PR detail to `docs/harness/pr-evidence/pr-NN.md`.
+3. Move completed successor-PR detail to `docs/harness/profile-pr-evidence/pr-NN.md`; predecessor evidence remains historical.
 4. Move chronological declarations and transitions to `docs/harness/v1-goal-history.md`.
 5. Keep the continuation record as a resume index, not a second goal ledger.
 6. Remove stale, superseded, or duplicated routing text from auto-loaded files after preserving any acceptance-relevant fact in an on-demand record.
@@ -33,6 +33,6 @@ Compaction is valid only when a new coordinator can recover every current author
 
 ## Loading rules
 
-- Routine workers: active role skill, current scope packet, bounded envelope, and targeted code/tests only.
+- Routine workers: active role skill, current successor scope packet from `profile-pr-scopes/`, bounded envelope, and targeted code/tests only.
 - Root reconciliation: exact current sections plus live state; open archives only for a dispute or final acceptance.
 - Final acceptance: load each compact PR evidence file and live PR/commit state, not the chronological archive unless a process dispute requires it.

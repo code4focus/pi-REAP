@@ -4,33 +4,34 @@
 
 These instructions apply to the entire repository.
 
-Treat `docs/plan/pi-REAP-v1.0.md` as the frozen product and delivery contract. For routine work, consume its relevant requirements through the hash-validated current PR scope packet; read the plan directly only under the context-routing exceptions below. Do not silently reinterpret a frozen requirement. If an explicit user instruction changes the plan, call out the deviation and its effect on the planned PR sequence.
+Treat `docs/plan/pi-REAP-v1.0-profile-revision.md` as the controlling successor product and delivery contract. It is an explicit user-directed revision of the frozen predecessor `docs/plan/pi-REAP-v1.0.md`; the predecessor remains authoritative only for unchanged semantics. For routine work, consume the successor requirements through the hash-validated current PR scope packet and read either plan directly only under the context-routing exceptions below. Do not silently reinterpret either contract or use predecessor fixed-effort semantics where the successor profile revision differs.
 
 ## Product invariants
 
 Preserve these rules in every change:
 
-1. Decide the initial effort before the first provider request.
+1. Resolve the exact capability/admission profile and decide the initial profile rung before the first provider request.
 2. Keep routing policy out of prompts, messages, tool descriptions/results, and conversation history.
 3. Apply effort request-locally through `before_provider_request`; never call `pi.setThinkingLevel(...)`.
-4. Change only `reasoning.effort` in a supported provider payload. Preserve the complete request otherwise, including cache-related and reasoning-context fields.
-5. Never lower effort within one task epoch. A settled independent task may start a new lower-effort epoch.
-6. Leave unsupported, unknown, invalid, or conflicted requests unchanged.
-7. Never select `max` automatically; only a local session command may enable it.
+4. In the v1 provider encoding, change only `reasoning.effort` to the exact resolved profile rung's provider value. Preserve the complete request otherwise, including cache-related and reasoning-context fields.
+5. Within one task epoch and one profile digest, never lower the resolved ordinal. A settled independent task may start a new lower rung; a profile change creates a new incomparable boundary.
+6. Leave unsupported, unknown, invalid, conflicted, unresolved-profile, or profile-revision/digest-mismatched requests unchanged.
+7. Never select an explicit-only rung or explicit ceiling automatically; only a Pi-local session command may enable one.
 8. Register Pi-local commands only, never an LLM-callable routing tool.
 9. Never write Pi settings or effort-router configuration. Do not persist prompt text in telemetry unless the user explicitly opts in.
+10. Bind runtime, telemetry, evaluation, qualification, and release evidence to exact profile ID, revision, digest, and model/catalog identity.
 
 ## One planned PR at a time
 
 Implement the seven slices in section 20 of the plan in order. Treat each slice as a scope boundary even when no GitHub PR exists yet:
 
-1. Repository skeleton and contract tests.
-2. Provider patch layer. Do not add classifier behavior.
-3. Epoch runtime and deterministic policy.
-4. Telemetry and shadow mode.
-5. Evaluation harness.
-6. Conservative enforcement.
-7. Version 1.0 hardening.
+1. Profile kernel and foundational contracts.
+2. Profile-aware provider adapter. Do not add classifier behavior.
+3. Profile-relative epoch runtime and deterministic policy.
+4. Profile-bound telemetry and shadow mode.
+5. Profile-aware evaluation harness.
+6. Profile qualification and conservative enforcement.
+7. Profile distribution, upgrade flow, and version 1.0 hardening.
 
 Do not mix a later slice into the current one for convenience. Small interfaces or test seams needed by the current slice are acceptable; behavior, configuration, or rollout belonging to a later slice is not. Verify earlier slices still satisfy their acceptance criteria before building on them.
 
@@ -40,7 +41,7 @@ Use `$implement-pi-reap-pr` for implementation work and `$review-pi-reap-pr` for
 
 Route routine work through the current PR scope packet instead of preloading broad harness material.
 
-1. Resolve the packet with `bash .agents/skills/orchestrate-pi-reap-goal/scripts/resolve_pr_scope.sh <PR-number>`.
+1. Resolve the active successor packet with `bash .agents/skills/orchestrate-pi-reap-goal/scripts/resolve_pr_scope.sh <PR-number>`.
 2. Give a worker only `AGENTS.md`, its role skill, the resolved packet, the bounded task envelope, and targeted source/test files.
 3. Do not preload the full frozen plan, the full dispatch policy, the blocker ledger, or another PR packet into a routine execution, review, or publication worker.
 4. Open only the on-demand plan ranges named by the current packet, and only when the packet lacks an exact semantic needed by the task.
@@ -86,7 +87,7 @@ While editing:
 - Prefer typed, faithful lifecycle and payload fixtures over permissive `any`-based mocks.
 - Label synthetic fixtures as synthetic. Do not present a fabricated payload as a captured real Pi request.
 - Keep captured fixtures sanitized and free of prompt text, secrets, identifiers, and user content.
-- Do not edit the frozen plan unless the user explicitly requests a plan revision.
+- Do not edit either archived plan unless the user explicitly requests another plan revision.
 
 Before handoff:
 

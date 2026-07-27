@@ -41,8 +41,13 @@ budget_check_file \
   "${budget_repo_root}/docs/harness/v1-continuation.md" \
   120 1200 "continuation"
 
-for budget_packet in "${budget_repo_root}"/docs/harness/pr-scopes/pr-*.md; do
+shopt -s nullglob
+for budget_packet in "${budget_repo_root}"/docs/harness/profile-pr-scopes/pr-*.md; do
   budget_check_file "$budget_packet" 90 600 "$(basename "$budget_packet")"
+done
+
+for budget_evidence in "${budget_repo_root}"/docs/harness/profile-pr-evidence/pr-*.md; do
+  budget_check_file "$budget_evidence" 240 3000 "$(basename "$budget_evidence") evidence"
 done
 
 if [[ "$budget_failed" == true ]]; then

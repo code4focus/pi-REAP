@@ -91,7 +91,7 @@ A cross-PR reuse is allowed only when the root records a concrete continuity ben
 
 ## 6. Context routing
 
-Use the hash-pinned packet at `docs/harness/pr-scopes/pr-NN.md` as the normal context boundary for one plan PR.
+Use the hash-pinned successor packet at `docs/harness/profile-pr-scopes/pr-NN.md` as the normal context boundary for one profile-revision plan PR. The predecessor `pr-scopes/` and `pr-evidence/` series are historical archives and are not routine context.
 
 Resolve it before dispatch:
 
@@ -99,7 +99,7 @@ Resolve it before dispatch:
 bash .agents/skills/orchestrate-pi-reap-goal/scripts/resolve_pr_scope.sh <PR-number>
 ```
 
-The resolver verifies the packet's PR identity and `source_plan_sha256` against the authoritative frozen plan. A missing or stale packet blocks routine dispatch.
+The resolver verifies packet version, source identity, PR identity, and `source_plan_sha256` against the authoritative successor plan. A missing or stale packet blocks routine dispatch.
 
 | Role | Load normally | Load only on exception | Do not preload |
 | --- | --- | --- | --- |
@@ -122,7 +122,7 @@ If packet resolution fails:
 
 The plan remains authoritative. Hash validation prevents a derived packet from silently surviving a plan change; it does not make the packet a new source of product truth.
 
-Keep `docs/harness/v1-goal-state.md` current as the compact process authority. Record controlling declarations, current PR and leases, accepted conclusions and links, harness optimizations, and blockers. Move completed-PR detail to `docs/harness/pr-evidence/` and chronological events to `docs/harness/v1-goal-history.md`; those files are on-demand evidence, not normal context. Update the current record before dispatching work affected by a new declaration. Do not rely on conversation history as the sole source for an acceptance-relevant decision.
+Keep `docs/harness/v1-goal-state.md` current as the compact process authority. Record controlling declarations, current PR and leases, accepted conclusions and links, harness optimizations, and blockers. Move completed successor-PR detail to `docs/harness/profile-pr-evidence/` and chronological events to `docs/harness/v1-goal-history.md`; those files are on-demand evidence, not normal context. Predecessor evidence remains historical. Update the current record before dispatching work affected by a new declaration. Do not rely on conversation history as the sole source for an acceptance-relevant decision.
 
 Run `.agents/skills/orchestrate-pi-reap-goal/scripts/check_context_budget.sh` after material harness changes and at every PR boundary. The root may compact or rewrite auto-loaded harness during the goal when doing so reduces context cost without changing authority, frozen semantics, acceptance conclusions, unresolved risks, hashes, or evidence traceability. Prefer removing duplication and splitting on-demand evidence over raising a budget. Never make routine workers load an archive to reconstruct current instructions.
 
