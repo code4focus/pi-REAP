@@ -1,4 +1,4 @@
-import type { Effort } from "./effort.js";
+import type { ResolvedRung } from "./profile.js";
 import type { TaskEpoch } from "./task-epoch.js";
 
 export interface EpochSummary {
@@ -24,7 +24,7 @@ export interface SessionRuntime {
   previousEpoch?: EpochSummary;
   pendingInput?: PendingInput;
   pendingRequests: PendingRequest[];
-  manualOverride?: { effort: Effort; scope: "session" };
+  manualOverride?: { rung: ResolvedRung; scope: "session" };
   resumeGuard: boolean;
   sessionStartedAt: number;
 }
