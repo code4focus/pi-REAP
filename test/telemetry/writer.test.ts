@@ -13,3 +13,13 @@ it("uses an explicit environment directory without changing configuration", () =
   writer.writeEpoch({ schemaVersion: 1, sessionHash: writer.sessionHash, epochId: "synthetic", status: "settled", taskClass: "simple_query", requestCount: 0, toolCallCount: 0, toolErrorCount: 0, providerErrorCount: 0, startedAt: 1, endedAt: 2 });
   expect(readFileSync(join(directory, "epochs.jsonl"), "utf8")).toContain('"schemaVersion":1');
 });
+
+it("degrades on an invalid target and recreates deleted logs without throwing", () => {
+  const failing = new TelemetryWriter({ directory: "/dev/null/pi-reap", sessionId: "synthetic" });
+  expect(() => failing.writeEpoch({ schemaVersion: 1, sessionHash: failing.sessionHash, epochId: "synthetic", status: "settled", taskClass: "simple_query", requestCount: 0, toolCallCount: 0, toolErrorCount: 0, providerErrorCount: 0, startedAt: 1, endedAt: 2 })).not.toThrow();
+  expect(failing.status()).toBe("telemetry:degraded");
+  directory = mkdtempSync(join(tmpdir(), "pi-reap-writer-")); const writer = new TelemetryWriter({ directory, sessionId: "synthetic" });
+  writer.writeEpoch({ schemaVersion: 1, sessionHash: writer.sessionHash, epochId: "one", status: "settled", taskClass: "simple_query", requestCount: 0, toolCallCount: 0, toolErrorCount: 0, providerErrorCount: 0, startedAt: 1, endedAt: 2 });
+  rmSync(directory, { recursive: true, force: true }); writer.writeEpoch({ schemaVersion: 1, sessionHash: writer.sessionHash, epochId: "two", status: "settled", taskClass: "simple_query", requestCount: 0, toolCallCount: 0, toolErrorCount: 0, providerErrorCount: 0, startedAt: 1, endedAt: 2 });
+  expect(readFileSync(join(directory, "epochs.jsonl"), "utf8")).toContain('"two"');
+});

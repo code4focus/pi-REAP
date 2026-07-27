@@ -24,6 +24,12 @@ describe("epoch router", () => {
     const router = new EpochRouter(); router.start({ prompt: "What is JSON?" }); router.settle(true);
     expect(router.start({ prompt: "continue" }).selectedEffort).toBe("xhigh");
   });
+  it("keeps a settled ambiguous follow-up conservative while standalone architecture starts new", () => {
+    const router = new EpochRouter(); router.start({ prompt: "implement this feature" }); router.onToolError(); router.onToolError(); router.settle();
+    expect(router.start({ prompt: "that one" }).relation).toBe("ambiguous");
+    expect(router.onProviderRequest()).toBe("xhigh");
+    router.settle(); expect(router.start({ prompt: "design an architecture plan" }).relation).toBe("new");
+  });
   it("raises tool and provider failures monotonically", () => {
     const router = new EpochRouter(); router.start({ prompt: "What is JSON?" });
     expect(router.onProviderRequest()).toBe("low"); router.onToolError(); expect(router.onProviderRequest()).toBe("high"); router.onToolError(); expect(router.onProviderRequest()).toBe("xhigh"); router.onProviderEnd("error"); expect(router.onProviderRequest()).toBe("xhigh");
@@ -31,6 +37,14 @@ describe("epoch router", () => {
   it("guards an ambiguous resumed session", () => {
     const router = new EpochRouter({ resumeReason: "resume" });
     expect(router.start({ prompt: "that one" }).selectedEffort).toBe("xhigh");
+  });
+  it("applies the PR 3 routing configuration without persisting it", () => {
+    const router = new EpochRouter({ resumeReason: "resume", config: { mode: "shadow", ambiguousEffort: "xhigh", failureEffort: "high", ui: { showStatus: false, notifyOnEscalation: true } } });
+    expect(router.runtime.mode).toBe("shadow");
+    expect(router.start({ prompt: "that one" }).selectedEffort).toBe("xhigh");
+    const failed = new EpochRouter({ config: { mode: "enforce", ambiguousEffort: "high", failureEffort: "high", ui: { showStatus: true, notifyOnEscalation: false } } });
+    failed.start({ prompt: "What is JSON?" }); failed.onToolError();
+    expect(failed.onProviderRequest()).toBe("high");
   });
   it.each(["continue", "fix it"])("guards resumed continuation %s when context is unavailable", (prompt) => {
     const router = new EpochRouter({ resumeReason: "resume" });
