@@ -5,7 +5,9 @@ import {
   sameProfileMatch,
   type ProfileActivationSnapshot,
   type ProfileBinding,
+  type InitialAdmissionKey,
   type ResolvedRung,
+  type RungSelector,
 } from "../domain/profile.js";
 import type { EffortRouterConfig } from "../config/schema.js";
 import type { RoutingDecision } from "../domain/routing-decision.js";
@@ -103,6 +105,20 @@ export class EpochRouter {
     return boundSelection ? { boundSelection } : undefined;
   }
 
+  /** A shadow baseline is retained only when it is a profile-issued provider value. */
+  isKnownProviderEffort(value: unknown): value is string {
+    if (!this.active || typeof value !== "string") return false;
+    return Object.values(this.active.routing.provider).some((selection) => selection?.effort === value);
+  }
+
+  /** Immutable activation data for observation only; no profile parsing or recomputation. */
+  observation(): { readonly binding: ProfileBinding; readonly capabilitySource: ActiveProfile["capability"]["source"]; readonly admissionSource: ActiveProfile["admission"]["source"]; readonly selected?: ResolvedRung; readonly selector?: RungSelector; readonly effective?: ResolvedRung; readonly manual?: ResolvedRung; readonly escalation?: { readonly rung: ResolvedRung; readonly selector: RungSelector } } | undefined {
+    if (!this.active) return undefined;
+    const epoch = this.runtime.currentEpoch;
+    const effective = this.effectiveRung(epoch);
+    return Object.freeze({ binding: this.active.binding, capabilitySource: this.active.capability.source, admissionSource: this.active.admission.source, ...(this.lastDecision ? { selected: this.lastDecision.selectedRung, selector: this.lastDecision.selector } : {}), ...(effective === undefined ? {} : { effective }), ...(this.runtime.manualOverride ? { manual: this.runtime.manualOverride.rung } : {}), ...(epoch?.escalationFloor && epoch.escalationSelector ? { escalation: { rung: epoch.escalationFloor, selector: epoch.escalationSelector } } : {}) });
+  }
+
   start(input: StartInput): RoutingDecision | undefined {
     if (!this.active) return undefined;
     const features = extractFeatures(input);
@@ -123,14 +139,14 @@ export class EpochRouter {
     if (!initial) return undefined;
 
     let epoch: TaskEpoch;
-    if (relation === "continuation" && current?.status === "active" && sameBinding(current.initialRung.binding, initial.binding)) {
+    if (relation === "continuation" && current?.status === "active" && sameBinding(current.initialRung.binding, initial.rung.binding)) {
       epoch = current;
-      this.raise(epoch, initial);
+      this.raise(epoch, initial.rung, initial.selector);
       if (previousFailed) this.escalate(epoch, "failedContinuation");
     } else {
-      if (current?.status === "active" && !sameBinding(current.initialRung.binding, initial.binding)) current.status = "retired";
-      epoch = this.createEpoch(initial, classified.taskClass, input.prompt);
-      if (relation === "ambiguous" && predecessor?.status === "settled" && sameBinding(predecessor.effectiveRung.binding, initial.binding)) {
+      if (current?.status === "active" && !sameBinding(current.initialRung.binding, initial.rung.binding)) current.status = "retired";
+      epoch = this.createEpoch(initial.rung, initial.selector, classified.taskClass, input.prompt);
+      if (relation === "ambiguous" && predecessor?.status === "settled" && sameBinding(predecessor.effectiveRung.binding, initial.rung.binding)) {
         epoch.inheritedFloor = predecessor.effectiveRung;
       }
       this.runtime.currentEpoch = epoch;
@@ -147,6 +163,7 @@ export class EpochRouter {
       epochId: epoch.id,
       relation,
       taskClass: classified.taskClass,
+      selector: initial.selector,
       selectedRung: automatic,
       effectiveFloor: this.effectiveRung(epoch) ?? automatic,
       confidence: classified.confidence === "high" ? "strong" : classified.confidence === "medium" ? "moderate" : "weak",
@@ -270,7 +287,7 @@ export class EpochRouter {
       + `\nmode:${this.runtime.mode}`;
   }
 
-  private resolveInitial(taskClass: TaskEpoch["taskClass"], relation: RoutingDecision["relation"]): ResolvedRung | undefined {
+  private resolveInitial(taskClass: TaskEpoch["taskClass"], relation: RoutingDecision["relation"]): ActiveProfile["routing"]["initial"][InitialAdmissionKey] | undefined {
     if (!this.active) return undefined;
     const key = relation !== "new" ? "continuation"
       : taskClass === "simple_query" ? "simpleQuery"
@@ -282,9 +299,9 @@ export class EpochRouter {
     return this.active.routing.initial[key];
   }
 
-  private createEpoch(initialRung: ResolvedRung, taskClass: TaskEpoch["taskClass"], prompt: string): TaskEpoch {
+  private createEpoch(initialRung: ResolvedRung, initialSelector: RungSelector, taskClass: TaskEpoch["taskClass"], prompt: string): TaskEpoch {
     const now = this.now();
-    return { id: this.nextId(), createdAt: now, lastActivityAt: now, status: "active", taskClass, initialRung, requestCount: 0, toolCallCount: 0, toolErrorCount: 0, providerErrorCount: 0, lastPromptHash: hash(prompt), decisionIds: [] };
+    return { id: this.nextId(), createdAt: now, lastActivityAt: now, status: "active", taskClass, initialRung, initialSelector, requestCount: 0, toolCallCount: 0, toolErrorCount: 0, providerErrorCount: 0, lastPromptHash: hash(prompt), decisionIds: [] };
   }
 
   private automaticFloor(epoch: TaskEpoch): ResolvedRung {
@@ -294,14 +311,16 @@ export class EpochRouter {
     return floor;
   }
 
-  private raise(epoch: TaskEpoch, rung: ResolvedRung): void {
+  private raise(epoch: TaskEpoch, rung: ResolvedRung, selector?: RungSelector): void {
     if (!sameBinding(epoch.initialRung.binding, rung.binding)) return;
     epoch.escalationFloor = epoch.escalationFloor ? higher(epoch.escalationFloor, rung) : rung;
+    if (selector && epoch.escalationFloor === rung) epoch.escalationSelector = selector;
   }
 
   private escalate(epoch: TaskEpoch, key: keyof ActiveProfile["routing"]["evidence"]): void {
     if (!this.active || !sameBinding(epoch.initialRung.binding, this.active.binding)) return;
-    this.raise(epoch, this.active.routing.evidence[key]);
+    const route = this.active.routing.evidence[key];
+    this.raise(epoch, route.rung, route.selector);
   }
 }
 

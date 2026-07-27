@@ -1,4 +1,4 @@
-import type { ResolvedRung } from "./profile.js";
+import type { ResolvedRung, RungSelector } from "./profile.js";
 import type { TaskClass } from "./task-epoch.js";
 
 export type ReasonCode =
@@ -29,6 +29,8 @@ export interface RoutingDecision {
   epochId: string;
   relation: "new" | "continuation" | "ambiguous";
   taskClass: TaskClass;
+  /** Exact factory-compiled admission selector, never inferred from the rung. */
+  selector: RungSelector;
   selectedRung: ResolvedRung;
   effectiveFloor: ResolvedRung;
   confidence: "strong" | "moderate" | "weak";

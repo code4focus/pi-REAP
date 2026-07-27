@@ -17,6 +17,24 @@ const router = (capabilityValue: unknown = capability, admissionValue: unknown =
 };
 describe("profile-relative epoch router", () => {
   it("decides before the first provider request and allows settled independent reset", () => { const r = router(); expect(r.start({ prompt: "implement feature" })?.selectedRung.rungId).toBe("r1"); r.onToolError(); r.settle(); expect(r.start({ prompt: "What is JSON?" })?.selectedRung.rungId).toBe("r0"); });
+  it("keeps generation, epoch floor, and manual preference when a reconciliation has the exact same binding", () => {
+    const r = router(); const snapshot = readySnapshot(); r.start({ prompt: "What is JSON?" }); r.onToolError(); expect(parseEffortCommand("/effort r3", r)).toBe(true);
+    const generation = r.generation; const epoch = r.runtime.currentEpoch; const effective = r.effectiveRung();
+    expect(r.activateSnapshot(match, snapshot)).toBe(true); expect(r.generation).toBe(generation); expect(r.runtime.currentEpoch).toBe(epoch); expect(r.effectiveRung()).toBe(effective); expect(r.runtime.manualOverride?.rung.rungId).toBe("r3");
+  });
+  it("retains compiled selector provenance when distinct selectors resolve to one rung", () => {
+    const sameRung = { ...admission, initial: { ...admission.initial, implementation: { kind: "anchor", name: "balanced" }, boundedRead: { kind: "next-above-lowest" } } } as const;
+    const implementation = router(capability, sameRung).start({ prompt: "implement feature" })!;
+    const bounded = router(capability, sameRung).start({ prompt: "inspect this" })!;
+    expect(implementation.selectedRung.rungId).toBe(bounded.selectedRung.rungId);
+    expect(implementation.selector).toEqual({ kind: "anchor", name: "balanced" });
+    expect(bounded.selector).toEqual({ kind: "next-above-lowest" });
+    const evidence = { ...admission, evidence: { ...admission.evidence, firstToolError: { selector: { kind: "anchor", name: "balanced" } } } } as const;
+    const escalated = router(capability, evidence); escalated.start({ prompt: "What is JSON?" }); escalated.onToolError();
+    expect(escalated.observation()?.escalation).toMatchObject({ selector: { kind: "anchor", name: "balanced" }, rung: { rungId: "r1" } });
+    expect(parseEffortCommand("/effort r3", escalated)).toBe(true);
+    expect(escalated.observation()?.manual).toMatchObject({ rungId: "r3" });
+  });
   it("inherits and escalates only within the exact profile binding", () => { const r = router(); r.start({ prompt: "What is JSON?" }); r.onToolError(); expect(r.start({ prompt: "continue" })?.effectiveFloor.rungId).toBe("r2"); });
   it.each([["error"], ["length"]] as const)("escalates %s", (reason) => { const r = router(); r.start({ prompt: "What is JSON?" }); r.onProviderEnd(reason); expect(r.effectiveRung()?.rungId).toBe("r2"); });
   it("uses aliases and explicit ceiling only through a local command; auto preserves the active floor", () => { const r = router(); r.start({ prompt: "What is JSON?" }); expect(parseEffortCommand("/effort careful", r)).toBe(true); expect(r.effectiveRung()?.rungId).toBe("r2"); expect(parseEffortCommand("/effort r3", r)).toBe(true); expect(r.effectiveRung()?.rungId).toBe("r3"); expect(parseEffortCommand("/effort auto", r)).toBe(true); expect(r.effectiveRung()?.rungId).toBe("r3"); });

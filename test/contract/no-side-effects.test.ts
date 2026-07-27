@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { extension } from "../../src/index.js";
+import { createExtension } from "../../src/index.js";
 import { defaultConfigPaths, loadConfig } from "../../src/config/load.js";
 import { ConfigurationSchema } from "../../src/config/schema.js";
 import { Value } from "@sinclair/typebox/value";
@@ -13,7 +13,7 @@ class StatefulFakeFileSystem {
 describe("PR 1 extension boundary", () => {
   it("does not register an LLM tool or set Pi thinking level", async () => {
     const pi = new ExtensionHarness();
-    await extension(pi.api());
+    await createExtension({ load: async () => ({ enabled: true, mode: "shadow", ambiguousEffort: "high", failureEffort: "xhigh", telemetry: { enabled: false, includePromptText: false, directory: "synthetic" }, ui: { showStatus: false, notifyOnEscalation: false } }) })(pi.api());
     expect(pi.commands.has("effort")).toBe(true);
   });
 

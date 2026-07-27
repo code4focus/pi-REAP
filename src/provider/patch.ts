@@ -24,6 +24,10 @@ export interface ProviderPatchInput {
   readonly resolvedRung?: unknown;
 }
 
+export type ProviderPatchOutcome =
+  | { readonly status: "applied"; readonly payload: unknown; readonly originalEffort?: string; readonly appliedEffort: string }
+  | { readonly status: "unsupported" | "invalid_payload" | "mapping_failed"; readonly payload: unknown; readonly originalEffort?: string };
+
 const isRecord = (value: unknown): value is RecordValue =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
@@ -91,6 +95,25 @@ export function patchProviderPayload(input: ProviderPatchInput, payload: unknown
   } catch {
     return payload;
   }
+}
+
+/** Observability-only result. It never invents a provider value or changes patch semantics. */
+export function patchProviderPayloadOutcome(input: ProviderPatchInput | undefined, payload: unknown): ProviderPatchOutcome {
+  const originalEffort = effortIn(payload);
+  if (!input || !Object.hasOwn(input, "boundSelection") || !isTrustedBoundProviderSelection(input.boundSelection)
+    || !supportsEffortRouting(input.boundSelection.api)) {
+    return { status: "unsupported", payload, ...(originalEffort === undefined ? {} : { originalEffort }) };
+  }
+  const patched = patchProviderPayload(input, payload);
+  if (patched === payload) {
+    return { status: canonicalJson(payload).ok ? "mapping_failed" : "invalid_payload", payload, ...(originalEffort === undefined ? {} : { originalEffort }) };
+  }
+  return { status: "applied", payload: patched, ...(originalEffort === undefined ? {} : { originalEffort }), appliedEffort: input.boundSelection.effort };
+}
+
+function effortIn(payload: unknown): string | undefined {
+  if (!isRecord(payload) || !isRecord(payload.reasoning)) return undefined;
+  return typeof payload.reasoning.effort === "string" ? payload.reasoning.effort : undefined;
 }
 
 /** Removes only the mutable field for structural preservation assertions. */

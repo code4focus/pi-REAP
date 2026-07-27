@@ -4,12 +4,14 @@ import { describe, expect, it } from "vitest";
 import {
   canonicalPayloadHash,
   patchProviderPayload,
+  patchProviderPayloadOutcome,
   supportsEffortRouting,
   withoutReasoningEffort,
   type ProviderPatchInput,
 } from "../../src/provider/patch.js";
 import {
   createProfileBinding,
+  createProfileActivationSnapshot,
   type AdmissionProfile,
   type ProfileRequestIdentity,
   type ReasoningCapabilityProfile,
@@ -82,6 +84,15 @@ function inputFor(api: "openai-codex-responses" | "openai-responses", rungId = "
   const identity: ProfileRequestIdentity = { match: capability.match, profileBinding: binding.binding };
   const resolvedRung: ResolvedRung = { binding: binding.binding, rungId: rung.id, ordinal: rung.ordinal };
   return { identity, capabilityProfile: capability, admissionProfile, resolvedRung };
+}
+
+function boundInputFor(api: "openai-codex-responses" | "openai-responses"): ProviderPatchInput {
+  const capability = profile(api); const admissionProfile = admission(capability);
+  const snapshot = createProfileActivationSnapshot(capability, admissionProfile);
+  if (snapshot.status !== "ready") throw new Error("synthetic bound profile should prepare");
+  const boundSelection = snapshot.routing.provider.economy;
+  if (!boundSelection) throw new Error("synthetic provider value should bind");
+  return { boundSelection };
 }
 
 function copy<T>(value: T): T {
@@ -179,6 +190,27 @@ describe("profile-aware provider patch layer", () => {
     const legacy = inputFor("openai-responses");
     const original = { reasoning: { effort: "medium" } };
     expect(patchProviderPayload({ ...legacy, boundSelection: { api: "openai-responses", effort: "low" } }, original)).toBe(original);
+  });
+
+  it("reports truthful structured outcomes and preserves every non-applied payload by reference", () => {
+    const appliedPayload = { reasoning: { effort: "medium" }, cache: "synthetic" };
+    const applied = patchProviderPayloadOutcome(boundInputFor("openai-responses"), appliedPayload);
+    expect(applied).toMatchObject({ status: "applied", appliedEffort: "low" }); expect(applied.payload).not.toBe(appliedPayload);
+    const unsupportedPayload = { reasoning: { effort: "medium" } };
+    const invalidPayload = new Date(0);
+    const mappingPayload = { reasoning: { effort: 4 } };
+    const conflicting = inputFor("openai-responses");
+    const conflictingIdentity = conflicting.identity as ProfileRequestIdentity;
+    const conflictPayload = { reasoning: { effort: "medium" } };
+    const cases = [
+      ["unsupported", patchProviderPayloadOutcome(undefined, unsupportedPayload), unsupportedPayload],
+      ["invalid_payload", patchProviderPayloadOutcome(boundInputFor("openai-responses"), invalidPayload), invalidPayload],
+      ["mapping_failed", patchProviderPayloadOutcome(boundInputFor("openai-responses"), mappingPayload), mappingPayload],
+      ["profile conflict", patchProviderPayloadOutcome({ ...conflicting, identity: { ...conflictingIdentity, match: { ...conflictingIdentity.match, modelCatalogDigest: "e".repeat(64) } } }, conflictPayload), conflictPayload],
+      ["untrusted bound selection", patchProviderPayloadOutcome({ ...boundInputFor("openai-responses"), boundSelection: { api: "openai-responses", effort: "low" } }, conflictPayload), conflictPayload],
+    ] as const;
+    for (const [name, outcome, original] of cases) { expect(outcome.payload, name).toBe(original); expect(outcome.status, name).not.toBe("applied"); expect(outcome).not.toHaveProperty("appliedEffort"); }
+    expect(cases[0]![1].status).toBe("unsupported"); expect(cases[1]![1].status).toBe("invalid_payload"); expect(cases[2]![1].status).toBe("mapping_failed"); expect(cases[3]![1].status).toBe("unsupported"); expect(cases[4]![1].status).toBe("unsupported");
   });
 
   it.each(["", { effort: "synthetic" }] as const)("fails closed for non-encodable provider value %#", (providerValue) => {

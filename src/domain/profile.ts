@@ -151,12 +151,18 @@ export type ProfileBindingResult =
   | { readonly ok: false; readonly reason: "invalid-capability-profile" | "invalid-admission-profile" | CanonicalFailureReason };
 
 export interface CompiledProfileRouting {
-  readonly initial: Readonly<Record<InitialAdmissionKey, ResolvedRung>>;
-  readonly evidence: Readonly<Record<EvidenceAdmissionKey, ResolvedRung>>;
+  readonly initial: Readonly<Record<InitialAdmissionKey, CompiledAdmissionRoute>>;
+  readonly evidence: Readonly<Record<EvidenceAdmissionKey, CompiledAdmissionRoute>>;
   /** Exact IDs and aliases that the session-local command may choose. */
   readonly manual: Readonly<Record<string, ResolvedRung>>;
   /** Factory-issued provider encodings for profile-local rungs. */
   readonly provider: Readonly<Record<string, BoundProviderSelection | undefined>>;
+}
+
+/** A factory-compiled admission selector and the profile-local rung it resolved to. */
+export interface CompiledAdmissionRoute {
+  readonly selector: RungSelector;
+  readonly rung: ResolvedRung;
 }
 
 /** Exact factory-issued provider encoding; consumers must reject unissued lookalikes. */
@@ -366,17 +372,19 @@ function compileRouting(
         ? deepFreeze({ binding, rungId: rung.id, ordinal: rung.ordinal })
         : undefined;
     };
-    const initial = Object.create(null) as Record<InitialAdmissionKey, ResolvedRung>;
+    const initial = Object.create(null) as Record<InitialAdmissionKey, CompiledAdmissionRoute>;
     for (const key of INITIAL_KEYS) {
-      const rung = resolve(admission.initial[key]);
+      const selector = admission.initial[key];
+      const rung = resolve(selector);
       if (!rung) return undefined;
-      initial[key] = rung;
+      initial[key] = deepFreeze({ selector: deepFreeze({ ...selector }), rung });
     }
-    const evidence = Object.create(null) as Record<EvidenceAdmissionKey, ResolvedRung>;
+    const evidence = Object.create(null) as Record<EvidenceAdmissionKey, CompiledAdmissionRoute>;
     for (const key of EVIDENCE_KEYS) {
-      const rung = resolve(admission.evidence[key].selector);
+      const selector = admission.evidence[key].selector;
+      const rung = resolve(selector);
       if (!rung) return undefined;
-      evidence[key] = rung;
+      evidence[key] = deepFreeze({ selector: deepFreeze({ ...selector }), rung });
     }
     const ceilingId = capability.explicitCeiling ?? capability.automaticCeiling;
     const ceiling = capability.rungs.find((rung) => rung.id === ceilingId);

@@ -1,4 +1,4 @@
-import type { ResolvedRung } from "./profile.js";
+import type { ResolvedRung, RungSelector } from "./profile.js";
 
 export type EpochStatus = "active" | "settled" | "failed" | "retired";
 
@@ -19,8 +19,11 @@ export interface TaskEpoch {
   status: EpochStatus;
   taskClass: TaskClass;
   initialRung: ResolvedRung;
+  initialSelector: RungSelector;
   inheritedFloor?: ResolvedRung;
   escalationFloor?: ResolvedRung;
+  /** Evidence selector that last raised the automatic floor, if any. */
+  escalationSelector?: RungSelector;
   requestCount: number;
   toolCallCount: number;
   toolErrorCount: number;
