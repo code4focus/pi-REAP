@@ -3,16 +3,27 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { exactTaskIds, validateCatalog } from "../runner/live-driver.js";
+import { exactTaskIds, planCalls, validateCatalog } from "../runner/live-driver.js";
 import {
   CaptureAbortGuard, cleanupPrivateRoot, createPrivateRoot, loadInstalledPi, loadPrivateRoot, readPrivateJsonFile, validatePrivateTaskFile,
-  liveUsageFromPiAssistantUsage, unavailableCachePrefixMeasurement, validateProductionBuild, writeFailureReceipt, writePrivate,
+  liveUsageFromPiAssistantUsage, productionExtensionOptions, unavailableCachePrefixMeasurement, validateProductionBuild, writeFailureReceipt, writePrivate,
 } from "../runner/live-production.js";
 
 const cleanup: string[] = [];
 afterEach(() => { for (const path of cleanup.splice(0)) rmSync(path, { recursive: true, force: true }); });
 
 describe("production live-capture offline preflight and private-root safety", () => {
+  it("constructs a complete read-only v1 config for each planned extension mode", async () => {
+    const tasks = exactTaskIds.map((id) => ({ id, body: `synthetic ${id}`, grader: { kind: "exact" as const, expected: "synthetic" } }));
+    const calls = planCalls(tasks); const enforce = calls.find((call) => call.kind === "route" && call.mode === "policy-enforce")!;
+    const shadow = calls.find((call) => call.kind === "route" && call.mode === "policy-shadow")!; const cache = calls.find((call) => call.kind === "cache")!;
+    for (const [call, mode] of [[enforce, "enforce"], [shadow, "shadow"], [cache, "shadow"]] as const) {
+      const options = productionExtensionOptions(call, "/private/synthetic-telemetry"); const config = await options.load!();
+      expect(config).toStrictEqual({ enabled: true, mode, ambiguousEffort: "high", failureEffort: "xhigh", telemetry: { enabled: true, includePromptText: false, directory: "/private/synthetic-telemetry" }, ui: { showStatus: false, notifyOnEscalation: false } });
+      expect(options).toMatchObject({ telemetryDirectory: "/private/synthetic-telemetry", sessionId: `live-${call.ordinal}` });
+    }
+  });
+
   it("binds the installed Pi terminal parser to the exact production usage conversion boundary", async () => {
     const shared = await import(pathToFileURL("/Users/ove/.local/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/api/openai-responses-shared.js").href) as { processResponsesStream: Function };
     const output = { content: [], usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };

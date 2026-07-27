@@ -12,10 +12,14 @@ export interface DecisionRecord {
   taskClass: TaskClass;
   recommendedEffort: Effort;
   /** Absent when shadow mode cannot observe a trustworthy baseline effort. */
-  appliedEffort?: Effort;
+  /** Provider-specific effort actually written by this extension; not wire-final truth. */
+  appliedEffort?: string;
   mode: "shadow" | "enforce";
   promptHash: string;
   promptChars: number;
+  /** Present only when the user explicitly enabled prompt-text telemetry. */
+  promptText?: string;
+  promptTextTruncated?: true;
   features: RoutingFeatures;
   reasons: ReasonCode[];
   timestamp: number;

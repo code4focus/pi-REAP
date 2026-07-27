@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 import { cacheControlsFingerprint, syntheticCacheCrossover, validateCacheCrossover } from "../runner/cache-crossover.js";
 import { acceptedBaseSha256, canonicalArtifactSha256, canonicalAttestationBytes, canonicalPriceTableSha256, fixedFixtureHash, frozenPlanSha256, pinnedReviewerNonce, pinnedWitnessHash, validateSanitizedLiveArtifact, validateTrustedLiveAcceptance, type SanitizedLiveAcceptanceArtifact, type TrustedLiveAttestation } from "../runner/live-acceptance.js";
-import { expectedExtensionBuildFingerprint, expectedSourceFingerprint } from "../runner/live-acceptance-pins.js";
+import { currentImplementationBinding, historicalV3CanaryBinding } from "../runner/live-acceptance-pins.js";
 import { syntheticTokenPricing } from "../runner/cost.js";
 
 const digest = (value: string): string => createHash("sha256").update(value).digest("hex");
@@ -12,7 +12,7 @@ const expected = { simple_query: "low", bounded_read: "medium", implementation: 
 const independentWitnessSignature = "UHIv5ySqTLCqY7dl3YX/2mdSKUF4mXswN+O5gyTFAs2/ARPtKElOrL1blM23nq5m+PLTEIVX+jerHQ9r4Ya6Dg==";
 const independentWitnessSignatureSha256 = "5c911f326c633f6d66098bbe20f676096998e2c8449f9e0441563c950e0799f7";
 const artifact = (): SanitizedLiveAcceptanceArtifact => ({ schemaVersion: 2, capturedAt: "2026-07-26T00:00:00Z", providerFingerprint: hashes.provider, modelFingerprint: hashes.model, priceTableFingerprint: canonicalPriceTableSha256(syntheticTokenPricing), cacheObservability: { protocolVersion: 1, rawCachedTokensPresence: "observed", verdict: "PASS" }, runs: Object.entries(routes).flatMap(([taskId, routeCase]) => (["fixed-xhigh", "fixed-high", "policy-shadow", "policy-enforce"] as const).map((mode) => ({ taskId: taskId as keyof typeof routes, routeCase, highConfidence: routeCase === "simple_query" || routeCase === "bounded_read", highRisk: routeCase === "high_risk_failure", mode, repetition: 1 as const, selectedEffort: mode === "fixed-xhigh" ? "xhigh" : mode === "fixed-high" ? "high" : expected[routeCase], ...(mode === "policy-shadow" ? { baselinePayloadHash: digest(`baseline:${taskId}`), appliedPayloadHash: digest(`baseline:${taskId}`) } : { appliedEffort: mode === "fixed-xhigh" ? "xhigh" : mode === "fixed-high" ? "high" : expected[routeCase] }), providerRequests: 1, toolRounds: 1, retries: 0, usage: { inputTokens: 10, uncachedInputTokens: 5, outputTokens: 1, reasoningTokens: 1, cacheReadTokens: 5, cacheWriteTokens: 1 }, latencyMs: 1, effectiveCostMicros: 122, accepted: true, criticalFailure: false }))), cacheCrossover: structuredClone(syntheticCacheCrossover), reviews: [] });
-const unsigned = (value: SanitizedLiveAcceptanceArtifact): TrustedLiveAttestation => ({ artifactSha256: canonicalArtifactSha256(value), providerFingerprint: value.providerFingerprint, modelFingerprint: value.modelFingerprint, priceTableFingerprint: value.priceTableFingerprint, pricing: syntheticTokenPricing, ceilings: { maxProviderRequests: 33, maxInputTokens: 1321, maxOutputTokens: 178, maxReasoningTokens: 300, maxEffectiveCostMicros: 100000 }, witnessedAt: "2026-07-26T00:00:00Z", witnessHash: pinnedWitnessHash, reviewerNonce: pinnedReviewerNonce, planSha256: frozenPlanSha256, acceptedBaseSha256, sourceFingerprint: expectedSourceFingerprint, extensionBuildFingerprint: expectedExtensionBuildFingerprint, issuedAt: "2026-07-26T00:00:00Z", expiresAt: "2026-07-26T01:00:00Z", signature: "AA==" });
+const unsigned = (value: SanitizedLiveAcceptanceArtifact): TrustedLiveAttestation => ({ artifactSha256: canonicalArtifactSha256(value), providerFingerprint: value.providerFingerprint, modelFingerprint: value.modelFingerprint, priceTableFingerprint: value.priceTableFingerprint, pricing: syntheticTokenPricing, ceilings: { maxProviderRequests: 33, maxInputTokens: 1321, maxOutputTokens: 178, maxReasoningTokens: 300, maxEffectiveCostMicros: 100000 }, witnessedAt: "2026-07-26T00:00:00Z", witnessHash: pinnedWitnessHash, reviewerNonce: pinnedReviewerNonce, planSha256: frozenPlanSha256, acceptedBaseSha256, sourceFingerprint: currentImplementationBinding.sourceFingerprint, extensionBuildFingerprint: currentImplementationBinding.extensionBuildFingerprint, issuedAt: "2026-07-26T00:00:00Z", expiresAt: "2026-07-26T01:00:00Z", signature: "AA==" });
 
 describe("production-pinned sanitized live acceptance boundary", () => {
   it("rejects every critical policy-enforce row, even when fixed-xhigh also rejects", () => {
@@ -49,6 +49,12 @@ describe("production-pinned sanitized live acceptance boundary", () => {
     expect(() => validateSanitizedLiveArtifact({ ...value, runs: [{ ...value.runs[0], taskId: "arbitrary-task" }, ...value.runs.slice(1)] }, syntheticTokenPricing)).toThrow("invalid live run");
     expect(() => validateSanitizedLiveArtifact({ ...value, reviews: [{ runId: "task-simple-query:policy-enforce", taskId: "task-simple-query", reviewerHash: hashes.reviewer, reviewedAt: "2026-07-26T00:00:00Z", reviewCode: "reject-noncritical-under-route", evidenceHash: hashes.evidence, fixtureCode: "fixed-noncritical-simple-query", fixtureHash: fixedFixtureHash("task-simple-query", "simple_query"), rationale: "free text" }] }, syntheticTokenPricing)).toThrow("unknown");
     expect(() => validateTrustedLiveAcceptance(value, { ...proof, ceilings: { ...proof.ceilings, maxInputTokens: 1319 } })).toThrow("not verified"); vi.useRealTimers();
+  });
+
+  it("rejects immutable historical v3 bindings before synthetic signature verification", () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date("2026-07-26T00:30:00Z"));
+    try { expect(() => validateTrustedLiveAcceptance(artifact(), { ...unsigned(artifact()), ...historicalV3CanaryBinding })).toThrow("invalid accepted base binding"); }
+    finally { vi.useRealTimers(); }
   });
 
   it("uses system time only and rejects old, future, and overlong windows", () => {
@@ -92,14 +98,15 @@ describe("production-pinned sanitized live acceptance boundary", () => {
     expect(() => validateCacheCrossover(raw)).toThrow("unknown");
   });
 
-  it("invalidates the legacy signed fixture when cache-observability bytes are added", () => {
-    const value = artifact(); const proof: TrustedLiveAttestation = { ...unsigned(value), witnessedAt: "2026-07-27T00:01:14.852Z", issuedAt: "2026-07-27T00:01:14.852Z", expiresAt: "2026-07-27T00:51:14.852Z", signature: independentWitnessSignature };
+  // Synthetic verifier fixture only; it is not a live v3 capture or signature.
+  it("keeps the synthetic legacy witness fixture bytes immutable but rejects its stale binding", () => {
+    const value = artifact(); const proof: TrustedLiveAttestation = { ...unsigned(value), ...historicalV3CanaryBinding, witnessedAt: "2026-07-27T00:01:14.852Z", issuedAt: "2026-07-27T00:01:14.852Z", expiresAt: "2026-07-27T00:51:14.852Z", signature: independentWitnessSignature };
     expect(canonicalArtifactSha256(value)).toBe("b620ba498c16f913d11ff1d49cf4632f3869de60d0938e687fbbc660bede0493");
     expect(createHash("sha256").update(canonicalAttestationBytes(proof)).digest("hex")).toBe("7d7d2e8be135acdf41de59ee3c56c5440303a5c7057ddb70d176cbbae3ea19f7");
     expect(createHash("sha256").update(Buffer.from(proof.signature, "base64")).digest("hex")).toBe(independentWitnessSignatureSha256);
     vi.useFakeTimers(); vi.setSystemTime(new Date("2026-07-27T00:30:00.000Z"));
     try {
-      expect(() => validateTrustedLiveAcceptance(value, proof)).toThrow("signature was not verified");
+      expect(() => validateTrustedLiveAcceptance(value, proof)).toThrow("invalid accepted base binding");
     } finally { vi.useRealTimers(); }
   });
 });

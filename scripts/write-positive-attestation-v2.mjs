@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { canonicalArtifactSha256, canonicalAttestationBytes, canonicalPriceTableSha256, pinnedReviewerNonce, pinnedWitnessHash } from "../dist/eval/eval/runner/live-acceptance.js";
-import { expectedExtensionBuildFingerprint, expectedSourceFingerprint } from "../dist/eval/eval/runner/live-acceptance-pins.js";
+import { currentImplementationBinding } from "../dist/eval/eval/runner/live-acceptance-pins.js";
 import { syntheticCacheCrossover } from "../dist/eval/eval/runner/cache-crossover.js";
 import { syntheticTokenPricing } from "../dist/eval/eval/runner/cost.js";
 
@@ -25,7 +25,7 @@ const artifact = {
 };
 const attestation = {
   artifactSha256: canonicalArtifactSha256(artifact), providerFingerprint: artifact.providerFingerprint, modelFingerprint: artifact.modelFingerprint, priceTableFingerprint: artifact.priceTableFingerprint, pricing: syntheticTokenPricing,
-  ceilings: { maxProviderRequests: 33, maxInputTokens: 1321, maxOutputTokens: 178, maxReasoningTokens: 300, maxEffectiveCostMicros: 100000 }, witnessedAt: issuedAt, witnessHash: pinnedWitnessHash, reviewerNonce: pinnedReviewerNonce, planSha256: "184c964814cd1752b89409fec352cafb11f8b1cffe91b55abb660b34dfb290f6", acceptedBaseSha256: "cbdbf256286ee7fb3d05e52ac7d702dfc0838ec6", sourceFingerprint: expectedSourceFingerprint, extensionBuildFingerprint: expectedExtensionBuildFingerprint, issuedAt, expiresAt, signature: "",
+  ceilings: { maxProviderRequests: 33, maxInputTokens: 1321, maxOutputTokens: 178, maxReasoningTokens: 300, maxEffectiveCostMicros: 100000 }, witnessedAt: issuedAt, witnessHash: pinnedWitnessHash, reviewerNonce: pinnedReviewerNonce, planSha256: "184c964814cd1752b89409fec352cafb11f8b1cffe91b55abb660b34dfb290f6", ...currentImplementationBinding, issuedAt, expiresAt, signature: "",
 };
 const output = resolve(process.argv[2] ?? "/private/tmp/pi-reap-pr6-witness"); mkdirSync(output, { recursive: true });
 const bytes = canonicalAttestationBytes(attestation); writeFileSync(resolve(output, `positive-attestation-${version}.bin`), bytes);

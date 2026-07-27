@@ -1,36 +1,12 @@
-import type { PiContext, PiExtensionHost, PiLifecycleEvents } from "../../src/index.js";
-
-export interface SyntheticModel { id: string; provider: string; api?: unknown; reasoning?: unknown; thinkingLevelMap?: unknown }
-export interface SyntheticAssistantUsage { inputTokens: number; outputTokens: number; reasoningTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number }
-export interface SyntheticContext { model: SyntheticModel; assistantUsage?: SyntheticAssistantUsage }
-export interface SyntheticToolError { toolName: string; message: string }
-export interface SyntheticSession { id: string }
-
-export interface LifecycleEvents extends PiLifecycleEvents {
-  assistant_usage: { ctx: SyntheticContext; usage: SyntheticAssistantUsage };
-  tool_error: { ctx: SyntheticContext; error: SyntheticToolError };
-  session_replaced: { previous: SyntheticSession; next: SyntheticSession };
-  compaction_retry: { ctx: SyntheticContext; attempt: number };
-  message_queued: { ctx: SyntheticContext; messageId: string };
-}
-
-export type LifecycleHandler<E extends keyof LifecycleEvents> =
-  (event: LifecycleEvents[E]) => void | Partial<LifecycleEvents[E]>;
-
-export class ExtensionHarness implements PiExtensionHost {
-  readonly registerToolCalls: unknown[] = [];
-  readonly setThinkingLevelCalls: string[] = [];
-  readonly commands = new Map<string, { description?: string; handler: (input: string, context: PiContext) => void | Promise<void> }>();
-  private readonly handlers: { [E in keyof LifecycleEvents]: LifecycleHandler<E>[] } = {
-    session_start: [], input: [], before_agent_start: [], assistant_usage: [], tool_error: [], session_replaced: [], compaction_retry: [], agent_settled: [], message_queued: [], before_provider_request: [], tool_call: [], tool_execution_end: [], message_end: [], session_compact: [],
-  };
-
-  registerTool(definition: unknown): void { this.registerToolCalls.push(definition); }
-  setThinkingLevel(level: string): void { this.setThinkingLevelCalls.push(level); }
-  registerCommand(name: string, options: { description?: string; handler: (input: string, context: PiContext) => void | Promise<void> }): void { this.commands.set(name, options); }
-  on<E extends keyof LifecycleEvents>(event: E, handler: LifecycleHandler<E>): void { this.handlers[event].push(handler); }
-
-  emit<E extends keyof LifecycleEvents>(event: E, initial: LifecycleEvents[E]): LifecycleEvents[E] {
-    return this.handlers[event].reduce<LifecycleEvents[E]>((current, handler) => ({ ...current, ...handler(current) }), initial);
-  }
+import type { AgentSettledEvent, BeforeAgentStartEvent, BeforeProviderRequestEvent, ExtensionAPI, ExtensionContext, InputEvent, MessageEndEvent, SessionCompactEvent, SessionShutdownEvent, SessionStartEvent, ToolCallEvent, ToolExecutionEndEvent } from "@earendil-works/pi-coding-agent";
+type Events = { session_start: SessionStartEvent; session_shutdown: SessionShutdownEvent; input: InputEvent; before_agent_start: BeforeAgentStartEvent; before_provider_request: BeforeProviderRequestEvent; tool_call: ToolCallEvent; tool_execution_end: ToolExecutionEndEvent; message_end: MessageEndEvent; session_compact: SessionCompactEvent; agent_settled: AgentSettledEvent };
+type Handler<E extends keyof Events> = (event: Events[E], ctx: ExtensionContext) => unknown;
+/** Synthetic Pi 0.82.1 lifecycle harness. */
+export class ExtensionHarness {
+  readonly commands = new Map<string, { handler: (args: string, ctx: ExtensionContext) => Promise<void> }>(); readonly status = new Map<string, string | undefined>(); readonly notifications: { message: string; type: string | undefined }[] = []; sessionId = "synthetic-session"; cwd = process.cwd(); model: unknown = { id: "synthetic", provider: "openai", api: "openai-responses", reasoning: true };
+  private readonly handlers: { [E in keyof Events]: Handler<E>[] } = { session_start: [], session_shutdown: [], input: [], before_agent_start: [], before_provider_request: [], tool_call: [], tool_execution_end: [], message_end: [], session_compact: [], agent_settled: [] };
+  get context() { return { cwd: this.cwd, model: this.model, sessionManager: { getSessionId: () => this.sessionId }, ui: { setStatus: (key: string, text: string | undefined) => this.status.set(key, text), notify: (message: string, type?: string) => this.notifications.push({ message, type }) } } as unknown as ExtensionContext; }
+  on<E extends keyof Events>(event: E, handler: Handler<E>) { this.handlers[event].push(handler); } registerCommand(name: string, options: { handler: (args: string, ctx: ExtensionContext) => Promise<void> }) { this.commands.set(name, options); }
+  emit<E extends keyof Events>(name: E, event: Events[E]): unknown { let out: unknown; for (const h of this.handlers[name]) { const x = h(event, this.context); if (x !== undefined) out = x; } return out; } api(): ExtensionAPI { return this as unknown as ExtensionAPI; }
+  start(reason: SessionStartEvent["reason"] = "startup") { this.emit("session_start", { type: "session_start", reason } satisfies SessionStartEvent); } shutdown(reason: SessionShutdownEvent["reason"] = "new") { this.emit("session_shutdown", { type: "session_shutdown", reason } satisfies SessionShutdownEvent); } input(text: string) { this.emit("input", { type: "input", text, source: "interactive" } satisfies InputEvent); } before(prompt: string) { this.emit("before_agent_start", { type: "before_agent_start", prompt, systemPrompt: "", systemPromptOptions: {} } as BeforeAgentStartEvent); } request(payload: unknown) { return this.emit("before_provider_request", { type: "before_provider_request", payload } satisfies BeforeProviderRequestEvent); } error() { this.emit("tool_execution_end", { type: "tool_execution_end", toolCallId: "synthetic", toolName: "read", result: {}, isError: true } satisfies ToolExecutionEndEvent); } message(stopReason: "error" | "length" | "aborted" | "stop" | "toolUse", usage?: Record<string, number>) { this.emit("message_end", { type: "message_end", message: { role: "assistant", stopReason, ...(usage ? { usage } : {}) } } as unknown as MessageEndEvent); } settled() { this.emit("agent_settled", { type: "agent_settled" } satisfies AgentSettledEvent); }
 }

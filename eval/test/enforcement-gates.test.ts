@@ -3,16 +3,14 @@ import { syntheticManifest } from "../corpus/manifest.js";
 import { syntheticCacheCrossover, type CacheCrossoverGroup } from "../runner/cache-crossover.js";
 import { assertEnforcementGates, assessEnforcementGates } from "../runner/gates.js";
 import { runEvaluation } from "../runner/run.js";
-import type { EvaluationExecutor } from "../runner/types.js";
+import { PiSessionExecutor } from "../runner/pi-session.js";
+import type { CorpusTask } from "../corpus/types.js";
 
-const executor: EvaluationExecutor = { execute: async (task, request) => {
-  const selectedEffort = request.requestedEffort ?? (task.id === "regression-under-routing-review" ? "low" : task.taskClass === "high_risk" || task.taskClass === "architecture" ? "xhigh" : task.taskClass === "implementation" || task.taskClass === "debugging" || task.taskClass === "continuation" ? "high" : task.taskClass === "bounded_read" ? "medium" : "low");
-  return { output: task.grader.expected, selectedEffort, providerRequests: 1, toolRounds: 1, retries: 0, usage: { inputTokens: 20, uncachedInputTokens: 10, outputTokens: 2, reasoningTokens: 3, cacheReadTokens: 10, cacheWriteTokens: 1 }, latencyMs: 4 };
-} };
+const executor = () => PiSessionExecutor.create({ load: async () => ({ enabled: true, mode: "shadow", ambiguousEffort: "high", failureEffort: "xhigh", telemetry: { enabled: false, includePromptText: false, directory: "synthetic" }, ui: { showStatus: true, notifyOnEscalation: false } }) });
 
 describe("PR 6 mandatory enforcement-gate machinery (synthetic evidence)", () => {
   it("requires both shadow and enforce comparisons, cache measurements, and synthetic contract dispositions without calling them human reviews", async () => {
-    const runs = await runEvaluation(syntheticManifest, executor, { corpusMode: "regression", repetitions: 1 });
+    const runs = await runEvaluation(syntheticManifest, await executor(), { corpusMode: "regression", repetitions: 1 });
     const underRoute = runs.find((run) => run.mode === "policy-enforce" && run.taskId === "regression-under-routing-review")!;
     const reviews = [{ kind: "synthetic_contract" as const, runId: underRoute.id, taskId: underRoute.taskId, fixtureHash: "a".repeat(64) }];
     const evidence = assessEnforcementGates(syntheticManifest, runs, syntheticCacheCrossover, reviews);
@@ -21,12 +19,12 @@ describe("PR 6 mandatory enforcement-gate machinery (synthetic evidence)", () =>
   });
 
   it("rejects missing review evidence for a fixed under-routing case", async () => {
-    const runs = await runEvaluation(syntheticManifest, executor, { corpusMode: "regression", repetitions: 1 });
+    const runs = await runEvaluation(syntheticManifest, await executor(), { corpusMode: "regression", repetitions: 1 });
     expect(() => assertEnforcementGates(syntheticManifest, runs, syntheticCacheCrossover, [])).toThrow("everyUnderRouteReviewed");
   });
 
   it("fails closed for fabricated reviews, incomplete high-risk rows, and unmatched baseline subsets", async () => {
-    const runs = await runEvaluation(syntheticManifest, executor, { corpusMode: "regression", repetitions: 1 });
+    const runs = await runEvaluation(syntheticManifest, await executor(), { corpusMode: "regression", repetitions: 1 });
     const underRoute = runs.find((run) => run.mode === "policy-enforce" && run.taskId === "regression-under-routing-review")!;
     const review = { kind: "synthetic_contract" as const, runId: underRoute.id, taskId: underRoute.taskId, fixtureHash: "a".repeat(64) };
     expect(() => assertEnforcementGates(syntheticManifest, runs, syntheticCacheCrossover, [{ ...review, taskId: "fabricated-task" }])).toThrow("everyUnderRouteReviewed");
@@ -38,7 +36,7 @@ describe("PR 6 mandatory enforcement-gate machinery (synthetic evidence)", () =>
   });
 
   it("rejects duplicate or mislabeled cache matrix rows, including all-low efforts", async () => {
-    const runs = await runEvaluation(syntheticManifest, executor, { corpusMode: "regression", repetitions: 1 });
+    const runs = await runEvaluation(syntheticManifest, await executor(), { corpusMode: "regression", repetitions: 1 });
     const underRoute = runs.find((run) => run.mode === "policy-enforce" && run.taskId === "regression-under-routing-review")!;
     const reviews = [{ kind: "synthetic_contract" as const, runId: underRoute.id, taskId: underRoute.taskId, fixtureHash: "a".repeat(64) }];
     const cloned = (): CacheCrossoverGroup[] => structuredClone(syntheticCacheCrossover) as CacheCrossoverGroup[];
@@ -48,6 +46,12 @@ describe("PR 6 mandatory enforcement-gate machinery (synthetic evidence)", () =>
     expect(() => assertEnforcementGates(syntheticManifest, runs, duplicate, reviews)).toThrow("duplicate");
     const wrongPhase = cloned(); (wrongPhase[1]!.samples[2] as { phase: string }).phase = "warm";
     expect(() => assertEnforcementGates(syntheticManifest, runs, wrongPhase, reviews)).toThrow("invalid");
+  });
+
+  it("derives policy effort from the production lifecycle prompt, not its corpus label", async () => {
+    const task: CorpusTask = { ...syntheticManifest.tasks.find((entry) => entry.id === "regression-high-risk")!, description: "What is JSON?" };
+    const result = await (await executor()).execute(task, { mode: "policy-enforce" });
+    expect(result.selectedEffort).toBe("low");
   });
 
 });

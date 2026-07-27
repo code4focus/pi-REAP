@@ -1,71 +1,30 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import { createExtension } from "../../src/index.js";
-import { ExtensionHarness, type SyntheticContext } from "./extension-harness.js";
-
-const directories: string[] = [];
-const ctx: SyntheticContext = { model: { id: "synthetic-model", provider: "openai", api: "openai-responses", reasoning: true } };
-const directory = () => { const path = mkdtempSync(join(tmpdir(), "pi-reap-pr4-")); directories.push(path); return path; };
-const records = (path: string, file: string) => readFileSync(join(path, file), "utf8").trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
-afterEach(() => { for (const path of directories.splice(0)) rmSync(path, { recursive: true, force: true }); });
-
-describe("telemetry and shadow mode (synthetic lifecycle coverage)", () => {
-  it("registers the Pi-local effort command with status through command context UI", () => {
-    const harness = new ExtensionHarness(); createExtension({ telemetryDirectory: directory() })(harness);
-    const command = harness.commands.get("effort"); const statuses: string[] = [];
-    expect(command?.description).toContain("local effort");
-    void command?.handler("status", { ui: { setStatus(key, text) { statuses.push(`${key}:${text}`); } } });
-    expect(statuses).toHaveLength(1); expect(statuses[0]).toContain("effort-router:effort:auto");
-  });
-
-  it("records correlated redacted decision, request, and epoch records", () => {
-    const path = directory(); const harness = new ExtensionHarness(); createExtension({ telemetryDirectory: path, sessionId: "synthetic-session", mode: "enforce" })(harness);
-    harness.emit("input", { ctx, input: { text: "Do not persist this secret prompt", source: "interactive" } });
-    harness.emit("before_agent_start", { ctx });
-    const result = harness.emit("before_provider_request", { ctx, request: { payload: { input: "secret prompt", tools: [{ name: "private" }], reasoning: { summary: "none" } } } });
-    harness.emit("message_end", { ctx, message: { role: "assistant", stopReason: "stop", usage: { inputTokens: 11, outputTokens: 7, reasoningTokens: 3 } } }); harness.emit("agent_settled", { ctx });
-    expect((result.request.payload as { reasoning: { effort: string } }).reasoning.effort).toBe("high");
-    const serialized = readFileSync(join(path, "decisions.jsonl"), "utf8") + readFileSync(join(path, "requests.jsonl"), "utf8") + readFileSync(join(path, "epochs.jsonl"), "utf8");
-    expect(serialized).not.toContain("Do not persist this secret prompt"); expect(serialized).not.toContain("secret prompt"); expect(serialized).not.toContain("private");
-    const [decision] = records(path, "decisions.jsonl"); const [request] = records(path, "requests.jsonl"); const [epoch] = records(path, "epochs.jsonl");
-    expect(decision).toMatchObject({ schemaVersion: 1, mode: "enforce", promptChars: 33 });
-    expect(request).toMatchObject({ schemaVersion: 1, requestIndex: 1, inputTokens: 11, outputTokens: 7, reasoningTokens: 3, stopReason: "stop", patchStatus: "applied" });
-    expect(epoch).toMatchObject({ schemaVersion: 1, requestCount: 1, status: "settled" });
-    expect(harness.setThinkingLevelCalls).toEqual([]); expect(harness.registerToolCalls).toEqual([]);
-  });
-
-  it("keeps the provider payload baseline in shadow while recording its recommendation separately", () => {
-    const path = directory(); const harness = new ExtensionHarness(); createExtension({ telemetryDirectory: path })(harness);
-    void harness.commands.get("effort")?.handler("shadow", { ui: { setStatus() {} } });
-    harness.emit("input", { ctx, input: { text: "What is JSON?" } }); harness.emit("before_agent_start", { ctx });
-    const original = { input: "synthetic", reasoning: { effort: "xhigh", context: "opaque" } };
-    const result = harness.emit("before_provider_request", { ctx, request: { payload: original } });
-    expect(result.request.payload).toBe(original);
-    harness.emit("message_end", { ctx, stopReason: "stop" });
-    const [request] = records(path, "requests.jsonl");
-    expect(request).toMatchObject({ patchStatus: "shadow", originalEffort: "xhigh", appliedEffort: "xhigh" });
-    expect(JSON.stringify(request)).not.toContain("opaque");
-    expect(harness.setThinkingLevelCalls).toEqual([]);
-  });
-
-  it("does not invent an applied effort for an unknown shadow baseline", () => {
-    const path = directory(); const harness = new ExtensionHarness(); createExtension({ telemetryDirectory: path })(harness);
-    void harness.commands.get("effort")?.handler("shadow", { ui: { setStatus() {} } });
-    harness.emit("input", { ctx, input: { text: "What is JSON?" } }); harness.emit("before_agent_start", { ctx });
-    const original = { input: "synthetic", reasoning: { summary: "none" } };
-    expect(harness.emit("before_provider_request", { ctx, request: { payload: original } }).request.payload).toBe(original);
-    harness.emit("message_end", { ctx, message: { role: "assistant", stopReason: "stop" } });
-    const [decision] = records(path, "decisions.jsonl"); const [request] = records(path, "requests.jsonl");
-    expect(decision?.recommendedEffort).toBe("low"); expect(decision?.appliedEffort).toBeUndefined(); expect(request?.appliedEffort).toBeUndefined();
-  });
-
-  it("continues routing when the telemetry directory is deleted", () => {
-    const path = directory(); const harness = new ExtensionHarness(); createExtension({ telemetryDirectory: path })(harness);
-    harness.emit("input", { ctx, input: { text: "What is JSON?" } }); harness.emit("before_agent_start", { ctx });
-    rmSync(path, { recursive: true, force: true });
-    expect(() => harness.emit("before_provider_request", { ctx, request: { payload: { reasoning: {} } } })).not.toThrow();
-    expect(() => harness.emit("message_end", { ctx, stopReason: "stop" })).not.toThrow();
-  });
+import { ExtensionHarness } from "./extension-harness.js";
+const dirs: string[] = []; const dir = () => { const p = mkdtempSync(join(tmpdir(), "pi-reap-pr4-")); dirs.push(p); return p; };
+const config = (directory: string, mode: "shadow" | "enforce" = "shadow", enabled = true, includePromptText = false) => async () => ({ enabled: true, mode, ambiguousEffort: "high" as const, failureEffort: "xhigh" as const, telemetry: { enabled, includePromptText, directory }, ui: { showStatus: true, notifyOnEscalation: false } });
+afterEach(() => dirs.splice(0).forEach((p) => rmSync(p, { recursive: true, force: true })));
+describe("telemetry and shadow mode (synthetic Pi 0.82.1 lifecycle)", () => {
+  it("keeps shadow payload unchanged and records baseline separately", async () => { const p = dir(); const h = new ExtensionHarness(); await createExtension({ load: config(p) })(h.api()); h.start(); h.input("synthetic secret prompt"); h.before("synthetic secret prompt"); const payload = { reasoning: { effort: "xhigh", context: "opaque" } }; expect(h.request(payload)).toBeUndefined(); h.message("stop"); const row = JSON.parse(readFileSync(join(p, "requests.jsonl"), "utf8")); expect(row).toMatchObject({ patchStatus: "shadow", originalEffort: "xhigh", appliedEffort: "xhigh" }); expect(JSON.stringify(row)).not.toContain("opaque"); expect(readFileSync(join(p, "decisions.jsonl"), "utf8")).not.toContain("synthetic secret prompt"); });
+  it("does no writes when telemetry is disabled and retains routing", async () => { const p = dir(); const h = new ExtensionHarness(); await createExtension({ load: config(p, "enforce", false) })(h.api()); h.start(); h.input("What is JSON?"); h.before("What is JSON?"); expect((h.request({ reasoning: {} }) as { reasoning: { effort: string } }).reasoning.effort).toBe("low"); expect(() => readFileSync(join(p, "requests.jsonl"))).toThrow(); });
+  it("persists prompt text only with explicit opt-in", async () => { const p = dir(); const h = new ExtensionHarness(); await createExtension({ load: config(p, "shadow", true, true) })(h.api()); h.start(); h.input("synthetic opt-in prompt"); h.before("synthetic opt-in prompt"); h.request({ reasoning: {} }); const row = JSON.parse(readFileSync(join(p, "decisions.jsonl"), "utf8")); expect(row.promptText).toBe("synthetic opt-in prompt"); });
+  it("caps opt-in prompt text without leaking its tail", async () => { const p = dir(); const h = new ExtensionHarness(); const prompt = `${"a".repeat(4096)}secret-tail`; await createExtension({ load: config(p, "shadow", true, true) })(h.api()); h.start(); h.input(prompt); h.before(prompt); h.request({ reasoning: {} }); const row = JSON.parse(readFileSync(join(p, "decisions.jsonl"), "utf8")); expect(row.promptText).toHaveLength(4096); expect(row.promptTextTruncated).toBe(true); expect(JSON.stringify(row)).not.toContain("secret-tail"); expect(row.promptChars).toBe(prompt.length); });
+  it("binds decision telemetry to Pi before-agent prompt, not input text", async () => { const p = dir(); const h = new ExtensionHarness(); const input = "synthetic input"; const prompt = "expanded synthetic before-agent prompt"; await createExtension({ load: config(p, "shadow", true, true) })(h.api()); h.start(); h.input(input); h.before(prompt); h.request({ reasoning: {} }); const row = JSON.parse(readFileSync(join(p, "decisions.jsonl"), "utf8")); expect(row).toMatchObject({ promptText: prompt, promptChars: prompt.length, promptHash: createHash("sha256").update(prompt).digest("hex") }); expect(JSON.stringify(row)).not.toContain(input); });
+  it("records provider-mapped applied effort rather than the recommendation", async () => { const p = dir(); const h = new ExtensionHarness(); h.model = { id: "synthetic", provider: "openai", api: "openai-responses", reasoning: true, thinkingLevelMap: { low: "minimal" } }; await createExtension({ load: config(p, "enforce") })(h.api()); h.start(); h.input("What is JSON?"); h.before("What is JSON?"); expect((h.request({ reasoning: {} }) as { reasoning: { effort: string } }).reasoning.effort).toBe("minimal"); h.message("stop"); expect(JSON.parse(readFileSync(join(p, "decisions.jsonl"), "utf8"))).toMatchObject({ recommendedEffort: "low", appliedEffort: "minimal" }); expect(JSON.parse(readFileSync(join(p, "requests.jsonl"), "utf8"))).toMatchObject({ appliedEffort: "minimal" }); });
+  it.each(["new", "resume", "fork", "reload"] as const)("isolates telemetry and mode on %s replacement", async (reason) => { const p = dir(); const h = new ExtensionHarness(); const nonces = ["one", "two"]; await createExtension({ load: config(p), telemetryNonce: () => nonces.shift()! })(h.api()); h.start(); await h.commands.get("effort")!.handler("enforce", h.context); await h.commands.get("effort")!.handler("max", h.context); h.input("What is JSON?"); h.before("What is JSON?"); h.request({ reasoning: {} }); h.shutdown(reason); h.start(reason); h.input("What is JSON?"); h.before("What is JSON?"); h.request({ reasoning: {} }); h.message("stop"); const rows = readFileSync(join(p, "requests.jsonl"), "utf8").trim().split("\n").map((x) => JSON.parse(x) as Record<string, unknown>); expect(new Set(rows.map((x) => x.sessionHash)).size).toBe(2); expect(rows.some((x) => x.correlationError === "unsettled_request")).toBe(true); expect(rows.filter((x) => x.stopReason === "stop")[0]!.requestIndex).toBe(1); expect(h.status.get("pi-reap")).toContain("mode:shadow"); expect(h.status.get("pi-reap")).toContain("effort:auto"); });
+  it("writes a relative directory below the session cwd", async () => { const p = dir(); const h = new ExtensionHarness(); h.cwd = p; await createExtension({ load: config(".pi/synthetic") })(h.api()); h.start(); h.input("What is JSON?"); h.before("What is JSON?"); h.request({ reasoning: {} }); expect(readFileSync(join(p, ".pi", "synthetic", "decisions.jsonl"), "utf8")).toContain("schemaVersion"); });
+  it.each([
+    ["applied", { api: "openai-responses", reasoning: true }, { reasoning: {} }, true],
+    ["unsupported", { api: "other", reasoning: true }, { reasoning: {} }, false],
+    ["invalid_payload", { api: "openai-responses", reasoning: true }, { reasoning: { effort: 4 } }, false],
+    ["mapping_failed", { api: "openai-responses", reasoning: true, thinkingLevelMap: { low: 1 } }, { reasoning: {} }, false],
+  ] as const)("records enforce outcome %s truthfully", async (expected, model, payload, patches) => { const p = dir(); const h = new ExtensionHarness(); h.model = { id: "synthetic", provider: "openai", ...model }; await createExtension({ load: config(p, "enforce") })(h.api()); h.start(); h.input("What is JSON?"); h.before("What is JSON?"); const result = h.request(payload); expect(result === undefined).toBe(!patches); h.message("stop"); const decision = JSON.parse(readFileSync(join(p, "decisions.jsonl"), "utf8")); const request = JSON.parse(readFileSync(join(p, "requests.jsonl"), "utf8")); expect(request.patchStatus).toBe(expected); expect(request.appliedEffort === undefined).toBe(!patches); expect(decision.appliedEffort === undefined).toBe(!patches); });
+  it("does not trust an arbitrary shadow baseline", async () => { const p = dir(); const h = new ExtensionHarness(); await createExtension({ load: config(p) })(h.api()); h.start(); h.input("What is JSON?"); h.before("What is JSON?"); h.request({ reasoning: { effort: "nonsense" } }); h.message("stop"); expect(JSON.parse(readFileSync(join(p, "requests.jsonl"), "utf8")).appliedEffort).toBeUndefined(); });
+  it("keeps runtime routing alive when telemetry cannot write", async () => { const h = new ExtensionHarness(); await createExtension({ load: config("/dev/null/pi-reap", "enforce") })(h.api()); h.start(); h.input("What is JSON?"); h.before("What is JSON?"); expect((h.request({ reasoning: {} }) as { reasoning: { effort: string } }).reasoning.effort).toBe("low"); h.message("stop"); expect(h.status.get("pi-reap")).toContain("telemetry:degraded"); });
+  it("correlates full usage and flushes exact applied data before settlement epoch", async () => { const p = dir(); const h = new ExtensionHarness(); h.model = { id: "synthetic", provider: "openai", api: "openai-responses", reasoning: true, thinkingLevelMap: { low: "minimal" } }; await createExtension({ load: config(p, "enforce") })(h.api()); h.start(); h.input("What is JSON?"); h.before("What is JSON?"); h.request({ reasoning: { effort: "medium" } }); h.message("stop", { inputTokens: 1, outputTokens: 2, reasoningTokens: 3, cacheReadTokens: 4, cacheWriteTokens: 5 }); h.input("What is JSON?"); h.before("What is JSON?"); h.request({ reasoning: { effort: "medium" } }); h.settled(); const rows = readFileSync(join(p, "requests.jsonl"), "utf8").trim().split("\n").map((x) => JSON.parse(x)); expect(rows[0]).toMatchObject({ patchStatus: "applied", originalEffort: "medium", appliedEffort: "minimal", requestIndex: 1, inputTokens: 1, outputTokens: 2, reasoningTokens: 3, cacheReadTokens: 4, cacheWriteTokens: 5 }); expect(rows[1]).toMatchObject({ patchStatus: "applied", originalEffort: "medium", appliedEffort: "high", requestIndex: 2, correlationError: "unsettled_request" }); const epoch = JSON.parse(readFileSync(join(p, "epochs.jsonl"), "utf8")); expect(epoch.sessionHash).toBe(rows[1].sessionHash); expect(rows[1].sessionHash).toBe(rows[0].sessionHash); const serialized = readFileSync(join(p, "requests.jsonl"), "utf8") + readFileSync(join(p, "epochs.jsonl"), "utf8"); expect(serialized.indexOf('"unsettled_request"')).toBeLessThan(serialized.lastIndexOf('"status":"settled"')); });
+  it("uses a new hash and flushes old pending work across sessions", async () => { const p = dir(); const h = new ExtensionHarness(); await createExtension({ load: config(p, "enforce") })(h.api()); h.sessionId = "synthetic-one"; h.start(); h.input("What is JSON?"); h.before("What is JSON?"); h.request({ reasoning: {} }); h.shutdown(); h.sessionId = "synthetic-two"; h.start(); h.input("What is JSON?"); h.before("What is JSON?"); h.request({ reasoning: {} }); h.message("stop"); const rows = readFileSync(join(p, "requests.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>); expect(new Set(rows.map((r) => r.sessionHash)).size).toBe(2); expect(rows.some((r) => r.correlationError === "unsettled_request")).toBe(true); expect(rows.some((r) => r.stopReason === "stop" && r.correlationError === undefined)).toBe(true); });
 });
