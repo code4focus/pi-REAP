@@ -207,6 +207,8 @@ describe("profile identity and provenance", () => {
       candidateAdmission,
     );
     expect(candidateResolution.status).toBe("unapproved-profile-source");
+    const syntheticResolution = resolveProfile(identityFor(), { ...capability, source: { kind: "synthetic-candidate", authority: "candidate-only", fixtureId: "synthetic-fixture" } }, { ...admission, source: { kind: "synthetic-candidate", authority: "candidate-only", fixtureId: "synthetic-fixture" } });
+    expect(syntheticResolution.status).toBe("unapproved-profile-source");
     expect(preservesBaseline(candidateResolution)).toBe(true);
     for (const source of [
       { kind: "repository-pinned" },
@@ -336,6 +338,16 @@ describe("total fail-closed resolution", () => {
 });
 
 describe("structural profile semantics", () => {
+  it.each([
+    ["balanced below economical", { economical: "r1", balanced: "r0", deliberate: "r2", exhaustive: "r2" }],
+    ["deliberate below balanced", { economical: "r0", balanced: "r2", deliberate: "r1", exhaustive: "r2" }],
+    ["exhaustive below deliberate", { economical: "r0", balanced: "r1", deliberate: "r2", exhaustive: "r1" }],
+  ])("rejects anchor order mutation: %s", (_name, anchors) => {
+    expect(validateCapabilityProfile({ ...copy(capability), anchors })).toBe(false);
+  });
+  it("permits equal adjacent anchors", () => {
+    expect(validateCapabilityProfile({ ...copy(capability), anchors: { economical: "r0", balanced: "r0", deliberate: "r1", exhaustive: "r1" } })).toBe(true);
+  });
   it.each([
     ["missing anchor", () => {
       const changed = copy(capability) as Mutable<ReasoningCapabilityProfile>;

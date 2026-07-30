@@ -19,6 +19,7 @@ import { TelemetryRuntime, type Usage } from "./telemetry/runtime.js";
 import { TelemetryWriter } from "./telemetry/writer.js";
 import type { ProfileObservation } from "./telemetry/records.js";
 import { mayProductionSessionEnforce } from "./qualification/enforcement.js";
+import { loadProductionProfileActivation } from "./distribution/profile-activation.js";
 
 export type PiExtension = ExtensionFactory;
 
@@ -65,13 +66,20 @@ const loadProductionConfig = () => loadConfig({ readFile: async (path) => {
 
 /** Pi 0.82.1 extension factory. Routing remains local to this extension session. */
 export const createExtension = (options: ExtensionOptions = {}): PiExtension => async (pi: ExtensionAPI) => {
-  const activationPreparation = prepareRuntimeActivation(options.activation);
-  const activation = activationPreparation.runtime;
   const config = await (options.load ?? loadProductionConfig)().catch(() => ({
     ...safeDefaults,
     telemetry: { ...safeDefaults.telemetry },
     ui: { ...safeDefaults.ui },
   }));
+  // The normal package entry uses a deterministic, read-only registry loader.
+  // Tests and embedders may still supply a fully materialized attestation.
+  const activationPreparation = prepareRuntimeActivation(options.activation ?? await loadProductionProfileActivation(
+    config.profileActivation === undefined ? {} : {
+      registryId: config.profileActivation.registryId,
+      bindingDigest: config.profileActivation.bindingDigest,
+    },
+  ));
+  const activation = activationPreparation.runtime;
   // telemetry remains an intentionally unused, read-only PR 4 seam.
   if (!config.enabled) return;
   let router: EpochRouter | undefined;

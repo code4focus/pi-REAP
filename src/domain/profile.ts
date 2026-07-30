@@ -30,6 +30,12 @@ export type ProfileSource =
       readonly kind: "validated-catalog-candidate";
       readonly authority: "candidate-only";
       readonly evidenceDigest: string;
+    }
+  | {
+      /** Packaged synthetic fixture; inspect-only and never an activation authority. */
+      readonly kind: "synthetic-candidate";
+      readonly authority: "candidate-only";
+      readonly fixtureId: string;
     };
 
 export interface ReasoningRung {
@@ -590,6 +596,15 @@ function parseCapabilityProfile(value: unknown): ReasoningCapabilityProfile | un
       }
       anchors[anchor] = rungId;
     }
+    // Anchors name an ordered admission scale.  Equal adjacent anchors are
+    // useful for two- and three-rung providers, but the scale may never run
+    // backwards as capabilities grow.
+    let previousAnchorOrdinal = -1;
+    for (const anchor of ADMISSION_ANCHORS) {
+      const ordinal = byId.get(anchors[anchor])!.ordinal;
+      if (ordinal < previousAnchorOrdinal) return undefined;
+      previousAnchorOrdinal = ordinal;
+    }
     return {
       schemaVersion: 1,
       profileId,
@@ -735,6 +750,11 @@ function parseProfileSource(value: unknown): ProfileSource | undefined {
       authority: "candidate-only",
       evidenceDigest: candidate.evidenceDigest,
     };
+  }
+  const synthetic = exactRecord(value, ["kind", "authority", "fixtureId"]);
+  if (synthetic?.kind === "synthetic-candidate" && synthetic.authority === "candidate-only") {
+    const fixtureId = requiredString(synthetic.fixtureId);
+    return fixtureId ? { kind: "synthetic-candidate", authority: "candidate-only", fixtureId } : undefined;
   }
   return undefined;
 }

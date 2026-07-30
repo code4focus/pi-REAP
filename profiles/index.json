@@ -2,43 +2,43 @@
   "format": 1,
   "profiles": [
     {
-      "id": "openai-responses-candidate-r1",
+      "id": "openai-responses-synthetic-candidate-r1",
       "state": "candidate",
       "capability": {
-        "path": "capability/openai-responses-candidate-r1.json",
-        "profileId": "openai-responses-candidate-r1",
+        "path": "capability/openai-responses-synthetic-candidate-r1.json",
+        "profileId": "openai-responses-synthetic-candidate-r1",
         "profileRevision": "r1",
-        "profileDigest": "7a014b11b1299c4a9ffea2f896e55404fa4ce8c7b388b325b041a2226f2fd0d6",
+        "profileDigest": "4a1665a631c2dc30e4394dd43a562318897d112192c77188b64ea1da6d864922",
         "source": {
-          "kind": "validated-catalog-candidate",
+          "kind": "synthetic-candidate",
           "authority": "candidate-only",
-          "evidenceDigest": "1111111111111111111111111111111111111111111111111111111111111111"
+          "fixtureId": "openai-responses-synthetic-candidate-r1"
         },
         "match": {
           "provider": "openai",
           "api": "openai-responses",
-          "model": "unqualified-openai-responses",
-          "modelCatalogRevision": "candidate-r1",
+          "model": "synthetic-unqualified-openai-responses",
+          "modelCatalogRevision": "synthetic-candidate-r1",
           "modelCatalogDigest": "2222222222222222222222222222222222222222222222222222222222222222",
           "piVersion": "0.82.1",
-          "providerAdapterRevision": "candidate-r1",
+          "providerAdapterRevision": "synthetic-candidate-r1",
           "providerAdapterDigest": "3333333333333333333333333333333333333333333333333333333333333333"
         }
       },
       "admission": {
-        "path": "admission/openai-responses-candidate-r1.json",
-        "profileId": "openai-responses-candidate-r1-admission",
+        "path": "admission/openai-responses-synthetic-candidate-r1.json",
+        "profileId": "openai-responses-synthetic-candidate-r1-admission",
         "profileRevision": "r1",
-        "profileDigest": "7fe9feec7d859050e5f61999af00d17dda1b9ff9736ab69cdff4ca892c34a623",
+        "profileDigest": "ece839fe8caeda23ee04b3f53e85f2a5f6f5f50a0847156be59c34651d390031",
         "source": {
-          "kind": "validated-catalog-candidate",
+          "kind": "synthetic-candidate",
           "authority": "candidate-only",
-          "evidenceDigest": "1111111111111111111111111111111111111111111111111111111111111111"
+          "fixtureId": "openai-responses-synthetic-candidate-r1"
         },
-        "capabilityProfileId": "openai-responses-candidate-r1",
+        "capabilityProfileId": "openai-responses-synthetic-candidate-r1",
         "capabilityProfileRevision": "r1"
       },
-      "bindingDigest": "b7981bb42783b9f6c611723374b59ebca8fbc7063b2b59b988bca1d9195f7b28"
+      "bindingDigest": "9643e6a0c2df97260d1dc91ba549c2da1f1ce2d77b303598083bc369a6812cbc"
     }
   ]
 }

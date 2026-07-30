@@ -11,5 +11,6 @@ describe("deterministic classifier", () => {
     ["检查并发取消协议是否存在竞态", "high_risk"],
   ] as const)("classifies %s as %s", (prompt, expected) => expect(route(prompt)).toBe(expected));
   it("uses continuation semantics for resume ambiguity", () => expect(classify({ features: extractFeatures({ prompt: "这个怎么样" }), relation: "ambiguous", previousFailed: false, resumeGuard: true }).taskClass).toBe("continuation"));
+  it("uses profile-neutral vocabulary for an unknown task", () => expect(classify({ features: extractFeatures({ prompt: "unclassified" }), relation: "new", previousFailed: false, resumeGuard: false }).reasons).toEqual(["AMBIGUOUS_CONSERVATIVE_DEFAULT"]));
   it("treats /goal as architecture semantics", () => expect(route("/goal complete the migration plan")).toBe("architecture"));
 });

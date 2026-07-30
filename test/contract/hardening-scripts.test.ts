@@ -280,7 +280,7 @@ describe("v1 hardening procedures", () => {
   it("ships only candidate profiles until qualification, approval, and an exact pin", async () => {
     const verify = await execFileAsync("pnpm", ["profile:verify"], { cwd: process.cwd() });
     const list = await execFileAsync("pnpm", ["profile:list"], { cwd: process.cwd() });
-    const check = await execFileAsync("pnpm", ["profile:check", "--id", "openai-responses-candidate-r1"], { cwd: process.cwd() });
+    const check = await execFileAsync("pnpm", ["profile:check", "--id", "openai-responses-synthetic-candidate-r1"], { cwd: process.cwd() });
     expect(verify.stdout).toContain("profile verification passed");
     expect(list.stdout).toContain("candidate");
     expect(check.stdout).toContain("preserve-baseline");
@@ -291,7 +291,7 @@ describe("v1 hardening procedures", () => {
   ])("rejects a %s profile conflict without pinning it", async (kind, message) => {
     const directory = await mkdtemp(join(tmpdir(), "pi-reap-profile-adversarial-"));
     await cp(join(process.cwd(), "profiles"), directory, { recursive: true });
-    const capabilityPath = join(directory, "capability", "openai-responses-candidate-r1.json");
+    const capabilityPath = join(directory, "capability", "openai-responses-synthetic-candidate-r1.json");
     const capability = JSON.parse(await readFile(capabilityPath, "utf8"));
     if (kind === "source") capability.source.authority = "wrong";
     if (kind === "identity") capability.profileId = "other";
@@ -305,11 +305,12 @@ describe("v1 hardening procedures", () => {
   });
 
   it.each([
-    ["unknown field", async (root: string) => { const path = join(root, "capability/openai-responses-candidate-r1.json"); const value = JSON.parse(await readFile(path, "utf8")); value.extra = true; await writeFile(path, JSON.stringify(value)); }, "unknown or missing fields"],
-    ["old content digest", async (root: string) => { const path = join(root, "capability/openai-responses-candidate-r1.json"); const value = JSON.parse(await readFile(path, "utf8")); value.rungs[0].providerValue = "changed"; await writeFile(path, JSON.stringify(value)); }, "content mutation"],
+    ["unknown field", async (root: string) => { const path = join(root, "capability/openai-responses-synthetic-candidate-r1.json"); const value = JSON.parse(await readFile(path, "utf8")); value.extra = true; await writeFile(path, JSON.stringify(value)); }, "unknown or missing fields"],
+    ["old content digest", async (root: string) => { const path = join(root, "capability/openai-responses-synthetic-candidate-r1.json"); const value = JSON.parse(await readFile(path, "utf8")); value.rungs[0].providerValue = "changed"; await writeFile(path, JSON.stringify(value)); }, "content mutation"],
     ["duplicate registry entry", async (root: string) => { const path = join(root, "index.json"); const value = JSON.parse(await readFile(path, "utf8")); value.profiles.push(value.profiles[0]); await writeFile(path, JSON.stringify(value)); }, "duplicate profile ID"],
     ["unindexed file", async (root: string) => { await writeFile(join(root, "capability/unindexed.json"), "{}"); }, "unindexed or missing files"],
     ["registry unknown field", async (root: string) => { const path = join(root, "index.json"); const value = JSON.parse(await readFile(path, "utf8")); value.extra = true; await writeFile(path, JSON.stringify(value)); }, "unknown or missing fields"],
+    ["unknown registry state", async (root: string) => { const path = join(root, "index.json"); const value = JSON.parse(await readFile(path, "utf8")); value.profiles[0].state = "promoted"; await writeFile(path, JSON.stringify(value)); }, "unknown registry state"],
   ])("rejects profile registry %s", async (_name, mutate, message) => {
     const directory = await mkdtemp(join(tmpdir(), "pi-reap-profile-registry-")); await cp(join(process.cwd(), "profiles"), directory, { recursive: true }); await mutate(directory);
     await expect(execFileAsync(process.execPath, ["scripts/profile-check.mjs", "--verify"], { cwd: process.cwd(), env: { ...process.env, PI_REAP_PROFILES_ROOT: directory } })).rejects.toMatchObject({ stderr: expect.stringContaining(message) });
@@ -318,10 +319,10 @@ describe("v1 hardening procedures", () => {
   it("rejects coordinated admission revision drift and source disagreement after content pins are recomputed", async () => {
     for (const kind of ["revision", "source"] as const) {
       const directory = await mkdtemp(join(tmpdir(), `pi-reap-profile-${kind}-`)); await cp(join(process.cwd(), "profiles"), directory, { recursive: true });
-      const admissionPath = join(directory, "admission/openai-responses-candidate-r1.json"); const admission = JSON.parse(await readFile(admissionPath, "utf8"));
+      const admissionPath = join(directory, "admission/openai-responses-synthetic-candidate-r1.json"); const admission = JSON.parse(await readFile(admissionPath, "utf8"));
       const indexPath = join(directory, "index.json"); const index = JSON.parse(await readFile(indexPath, "utf8"));
       if (kind === "revision") { admission.profileRevision = "r2"; index.profiles[0].admission.profileRevision = "r2"; }
-      else { admission.source.evidenceDigest = "8".repeat(64); index.profiles[0].admission.source.evidenceDigest = "8".repeat(64); }
+      else { admission.source.fixtureId = "other-synthetic-fixture"; index.profiles[0].admission.source.fixtureId = "other-synthetic-fixture"; }
       index.profiles[0].admission.profileDigest = digest(admission); await writeFile(admissionPath, JSON.stringify(admission)); await writeFile(indexPath, JSON.stringify(index));
       await expect(execFileAsync(process.execPath, ["scripts/profile-check.mjs", "--verify"], { cwd: process.cwd(), env: { ...process.env, PI_REAP_PROFILES_ROOT: directory } })).rejects.toMatchObject({ stderr: expect.stringContaining(kind === "revision" ? "stale or uncoordinated revision" : "source disagreement") });
     }
@@ -329,7 +330,7 @@ describe("v1 hardening procedures", () => {
 
   it("rejects a coordinated provider/API mapping mutation against the pinned registry identity", async () => {
     const directory = await mkdtemp(join(tmpdir(), "pi-reap-profile-mapping-")); await cp(join(process.cwd(), "profiles"), directory, { recursive: true });
-    const capabilityPath = join(directory, "capability/openai-responses-candidate-r1.json"); const capability = JSON.parse(await readFile(capabilityPath, "utf8"));
+    const capabilityPath = join(directory, "capability/openai-responses-synthetic-candidate-r1.json"); const capability = JSON.parse(await readFile(capabilityPath, "utf8"));
     capability.match.api = "other-api";
     const indexPath = join(directory, "index.json"); const index = JSON.parse(await readFile(indexPath, "utf8")); index.profiles[0].capability.profileDigest = digest(capability);
     await writeFile(capabilityPath, JSON.stringify(capability)); await writeFile(indexPath, JSON.stringify(index));
@@ -338,7 +339,7 @@ describe("v1 hardening procedures", () => {
 
   it("rejects symlinked profile paths even when the target is valid JSON", async () => {
     const directory = await mkdtemp(join(tmpdir(), "pi-reap-profile-symlink-")); await cp(join(process.cwd(), "profiles"), directory, { recursive: true });
-    const path = join(directory, "capability/openai-responses-candidate-r1.json"); const outside = join(await mkdtemp(join(tmpdir(), "pi-reap-profile-outside-")), "profile.json");
+    const path = join(directory, "capability/openai-responses-synthetic-candidate-r1.json"); const outside = join(await mkdtemp(join(tmpdir(), "pi-reap-profile-outside-")), "profile.json");
     await writeFile(outside, await readFile(path)); await unlink(path); await symlink(outside, path);
     await expect(execFileAsync(process.execPath, ["scripts/profile-check.mjs", "--verify"], { cwd: process.cwd(), env: { ...process.env, PI_REAP_PROFILES_ROOT: directory } })).rejects.toMatchObject({ stderr: expect.stringContaining("contained regular file") });
   });

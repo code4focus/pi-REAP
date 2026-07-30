@@ -52,6 +52,16 @@ describe("profile-relative epoch router", () => {
     r.settle();
     expect(r.start({ prompt: "new question: what is JSON?" })?.effectiveFloor.rungId).toBe("r0");
   });
+  it("treats a failed predecessor as failedContinuation for an ambiguous reference", () => {
+    const r = router();
+    expect(r.start({ prompt: "implement feature" })?.effectiveFloor.rungId).toBe("r1");
+    r.settle(true);
+    // No explicit continuation token: this is the production ambiguous path.
+    const decision = r.start({ prompt: "that one" })!;
+    expect(decision.relation).toBe("ambiguous");
+    expect(decision.selectedRung.rungId).toBe("r2");
+    expect(decision.reasons).toContain("PREVIOUS_EPOCH_FAILED");
+  });
   it("accepts an exact manual choice before the first task and treats repeated valid commands as handled", () => {
     const r = router();
     expect(parseEffortCommand("/effort r3", r)).toBe(true);

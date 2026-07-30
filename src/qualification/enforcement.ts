@@ -345,6 +345,10 @@ function exactSource(value: ProfileSource): boolean {
     exactKeys(value, ["kind", "authority", "evidenceDigest"], "candidate source");
     return value.authority === "candidate-only" && digest(value.evidenceDigest);
   }
+  if (value.kind === "synthetic-candidate") {
+    exactKeys(value, ["kind", "authority", "fixtureId"], "synthetic candidate source");
+    return value.authority === "candidate-only" && nonEmpty(value.fixtureId);
+  }
   return false;
 }
 

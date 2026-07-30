@@ -19,6 +19,6 @@ export const historicalV3CanaryBinding: ImplementationBinding = Object.freeze({
 /** Current corrected implementation binding, reproduced offline after build. */
 export const currentImplementationBinding: ImplementationBinding = Object.freeze({
   acceptedBaseSha256: "53f312375293a80fa948c3fc8122fbc74471bc53",
-  sourceFingerprint: "f0b999272e2ec4ece93c620559f90f5838a14e4b57fbd90e8e9edb2c912b2818",
-  extensionBuildFingerprint: "406bd6fd68ff90d9698c1c84c25c011d1caf47650477c22a7eb9c4a6024286f5",
+  sourceFingerprint: "f622c6702d24d4c968e594c3c37ed48809033942fd65a6dd26a5a6ecd348a04e",
+  extensionBuildFingerprint: "f63dab92da381f6c7ed6e14a51bdc1156368267912a21cee230673219a61bf0e",
 });
