@@ -133,7 +133,10 @@ export class EpochRouter {
       ? "continuation"
       : standalone ? "new" : (current || this.runtime.previousEpoch || this.runtime.resumeGuard) ? "ambiguous" : "new";
     const predecessor = current?.status === "active" ? undefined : this.runtime.previousEpoch;
-    const previousFailed = relation === "continuation" && (current?.status === "failed" || predecessor?.status === "failed");
+    // Any relationship except an independent new task must retain a failure
+    // floor.  In particular, "that one" after a failed settled epoch is
+    // ambiguous rather than safe to downgrade.
+    const previousFailed = relation !== "new" && (current?.status === "failed" || predecessor?.status === "failed");
     const classified = classify({ features, relation, previousFailed, resumeGuard: this.runtime.resumeGuard });
     const initial = this.resolveInitial(classified.taskClass, relation);
     if (!initial) return undefined;

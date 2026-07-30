@@ -3,6 +3,7 @@ import {
   canonicalJson,
   canonicalProfileDigest,
   createProfileBinding,
+  parseRungSelector,
   preservesBaseline,
   resolveAutomaticRung,
   resolveProfile,
@@ -108,6 +109,19 @@ function allSelectors(selector: RungSelector): AdmissionProfile["initial"] {
 }
 
 describe("closed canonical profile data", () => {
+  it("parses the exhaustive shared selector union and rejects unknown shapes", () => {
+    const selectors: readonly RungSelector[] = [
+      { kind: "lowest-automatic" },
+      { kind: "next-above-lowest" },
+      { kind: "next-below-ceiling" },
+      { kind: "automatic-ceiling" },
+      { kind: "anchor", name: "balanced" },
+    ];
+    for (const selector of selectors) expect(parseRungSelector(selector)).toEqual(selector);
+    expect(parseRungSelector({ kind: "next-above-lowest", name: "balanced" })).toBeUndefined();
+    expect(parseRungSelector({ kind: "unknown" })).toBeUndefined();
+  });
+
   it("canonicalizes valid data deterministically without key-order dependence", () => {
     expect(canonicalJson({ b: [2, { d: true, c: null }], a: 1 })).toEqual({
       ok: true,
@@ -193,6 +207,8 @@ describe("profile identity and provenance", () => {
       candidateAdmission,
     );
     expect(candidateResolution.status).toBe("unapproved-profile-source");
+    const syntheticResolution = resolveProfile(identityFor(), { ...capability, source: { kind: "synthetic-candidate", authority: "candidate-only", fixtureId: "synthetic-fixture" } }, { ...admission, source: { kind: "synthetic-candidate", authority: "candidate-only", fixtureId: "synthetic-fixture" } });
+    expect(syntheticResolution.status).toBe("unapproved-profile-source");
     expect(preservesBaseline(candidateResolution)).toBe(true);
     for (const source of [
       { kind: "repository-pinned" },
@@ -322,6 +338,16 @@ describe("total fail-closed resolution", () => {
 });
 
 describe("structural profile semantics", () => {
+  it.each([
+    ["balanced below economical", { economical: "r1", balanced: "r0", deliberate: "r2", exhaustive: "r2" }],
+    ["deliberate below balanced", { economical: "r0", balanced: "r2", deliberate: "r1", exhaustive: "r2" }],
+    ["exhaustive below deliberate", { economical: "r0", balanced: "r1", deliberate: "r2", exhaustive: "r1" }],
+  ])("rejects anchor order mutation: %s", (_name, anchors) => {
+    expect(validateCapabilityProfile({ ...copy(capability), anchors })).toBe(false);
+  });
+  it("permits equal adjacent anchors", () => {
+    expect(validateCapabilityProfile({ ...copy(capability), anchors: { economical: "r0", balanced: "r0", deliberate: "r1", exhaustive: "r1" } })).toBe(true);
+  });
   it.each([
     ["missing anchor", () => {
       const changed = copy(capability) as Mutable<ReasoningCapabilityProfile>;

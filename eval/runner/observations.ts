@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { parseRungSelector } from "../../src/domain/profile.js";
 import type { ProfileObservation } from "../../src/telemetry/records.js";
 import type { ObservedProduction, ObservedRequest, ObservedRequestKey, ObservedRouting, ProductionObservation, UnavailableProduction, UsageMetrics } from "./types.js";
 
@@ -27,7 +28,12 @@ function profile(value: unknown): ProfileObservation {
   for (const [record, keys] of [[capability, ["id", "revision", "digest"]], [admission, ["id", "revision", "digest"]], [model, ["provider", "api", "model", "catalogRevision", "catalogDigest", "piVersion", "adapterRevision", "adapterDigest"]]] as const) for (const key of keys) requiredString(record, key);
   if (!isRecord(capability.source) || !isRecord(admission.source)) throw new Error("malformed telemetry: profile source");
   const rung = (v: unknown, providerValue = false) => { if (v === undefined) return undefined; if (!isRecord(v)) throw new Error("malformed telemetry: rung"); const result = { rungId: requiredString(v, "rungId"), ordinal: requiredNonnegativeInteger(v, "ordinal"), ...(providerValue && Object.hasOwn(v, "providerValue") ? { providerValue: requiredString(v, "providerValue") } : {}) }; return result; };
-  const selector = (v: unknown) => { if (v === undefined) return undefined; if (!isRecord(v)) throw new Error("malformed telemetry: selector"); const kind = string(v.kind); if (kind === "anchor") { const name = string(v.name); if (name !== "economical" && name !== "balanced" && name !== "deliberate" && name !== "exhaustive") throw new Error("malformed telemetry: anchor"); return { kind, name } as ProfileObservation["selector"]; } if (kind !== "lowest-automatic" && kind !== "automatic-ceiling" && kind !== "next-below-ceiling") throw new Error("malformed telemetry: selector kind"); if (Object.hasOwn(v, "name")) throw new Error("malformed telemetry: selector shape"); return { kind } as ProfileObservation["selector"]; };
+  const selector = (v: unknown) => {
+    if (v === undefined) return undefined;
+    const parsed = parseRungSelector(v);
+    if (!parsed) throw new Error("malformed telemetry: selector");
+    return parsed;
+  };
   const escalation = value.escalation === undefined ? undefined : isRecord(value.escalation) ? { selector: selector(value.escalation.selector)!, rungId: requiredString(value.escalation, "rungId"), ordinal: requiredNonnegativeInteger(value.escalation, "ordinal") } : undefined;
   if (value.escalation !== undefined && !escalation) throw new Error("malformed telemetry: escalation");
   return { capability: { id: requiredString(capability, "id"), revision: requiredString(capability, "revision"), digest: requiredString(capability, "digest"), source: capability.source }, admission: { id: requiredString(admission, "id"), revision: requiredString(admission, "revision"), digest: requiredString(admission, "digest"), source: admission.source }, model: { provider: requiredString(model, "provider"), api: requiredString(model, "api"), model: requiredString(model, "model"), catalogRevision: requiredString(model, "catalogRevision"), catalogDigest: requiredString(model, "catalogDigest"), piVersion: requiredString(model, "piVersion"), adapterRevision: requiredString(model, "adapterRevision"), adapterDigest: requiredString(model, "adapterDigest") }, ...(selector(value.selector) ? { selector: selector(value.selector)! } : {}), ...(rung(value.resolved, true) ? { resolved: rung(value.resolved, true)! } : {}), ...(rung(value.requested) ? { requested: rung(value.requested)! } : {}), ...(rung(value.effective) ? { effective: rung(value.effective)! } : {}), ...(rung(value.manual) ? { manual: rung(value.manual)! } : {}), ...(escalation ? { escalation } : {}), generation: requiredNonnegativeInteger(value, "generation") };

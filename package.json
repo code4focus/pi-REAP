@@ -1,7 +1,6 @@
 {
   "name": "pi-reap",
-  "version": "0.1.0",
-  "private": true,
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
@@ -11,7 +10,14 @@
     "eval:build": "tsc -p eval/tsconfig.json",
     "eval:typecheck": "tsc -p eval/tsconfig.json --noEmit",
     "eval:sample": "vitest run eval/test/sample-report.test.ts",
-    "eval:live:dry-run": "pnpm eval:build && node scripts/live-acceptance-driver.mjs"
+    "eval:live:dry-run": "pnpm eval:build && node scripts/live-acceptance-driver.mjs",
+    "fixtures:verify": "node scripts/verify-pi-fixtures.mjs",
+    "profile:verify": "node scripts/profile-check.mjs --verify",
+    "profile:list": "node scripts/profile-check.mjs --list",
+    "profile:check": "node scripts/profile-check.mjs --check",
+    "release:check": "node scripts/release-check.mjs --dry-run",
+    "rollback:check": "node scripts/rollback-check.mjs --dry-run",
+    "package:check": "node scripts/package-check.mjs --dry-run"
   },
   "dependencies": {
     "@sinclair/typebox": "^0.34.41",
@@ -24,5 +30,29 @@
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"
   },
-  "packageManager": "pnpm@10.32.1"
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "0.82.1"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "src", "profiles", "scripts/profile-check.mjs", "docs/OPERATIONS.md", "docs/RELEASE.md", "docs/UPGRADING_PI.md"],
+  "keywords": ["pi-package", "pi", "reasoning", "effort-routing"],
+  "pi": {
+    "extensions": ["./src/index.ts"]
+  },
+  "packageManager": "pnpm@10.32.1",
+  "piReapCompatibility": {
+    "piCodingAgent": "@earendil-works/pi-coding-agent@0.82.1",
+    "upstreamCommit": "cee5ff7520d8828bed9955ef00419e995d1f91e0",
+    "piExecutableSha256": "af302f231437eaf6f37691bce4b34234fcb626bcb5eb3910d4fc3f6519bf78ca",
+    "piRuntimeGraphSha256": "fe2469ef9584883f9ea8b36d7f13d55f907ec4fd904663d38c2978d107bd2bc3",
+    "piCatalogSha256": "c3313710bc6910e6bbcb06d5867247e97ec3fa6c2af9bc780f8a3eefb03e32e1",
+    "upgradePolicy": "Run pnpm fixtures:verify and the full release gate before changing this pin."
+  }
 }

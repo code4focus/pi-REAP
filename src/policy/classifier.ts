@@ -11,5 +11,5 @@ export function classify(input: ClassificationInput): Classification {
   if (relation !== "new" || yes(features, "continuationSignal") || yes(features, "streamingContinuation")) return { taskClass: "continuation", confidence: "medium", reasons: ["CONTINUATION_REFERENCE"] };
   if (yes(features, "boundedRead")) return { taskClass: "bounded_read", confidence: "high", reasons: ["BOUNDED_READ_ONLY"] };
   if (yes(features, "simpleQuestion") && yes(features, "shortPrompt")) return { taskClass: "simple_query", confidence: "high", reasons: ["EXPLICIT_SIMPLE_QUERY"] };
-  return { taskClass: "unknown", confidence: "low", reasons: ["AMBIGUOUS_DEFAULT_HIGH"] };
+  return { taskClass: "unknown", confidence: "low", reasons: ["AMBIGUOUS_CONSERVATIVE_DEFAULT"] };
 }

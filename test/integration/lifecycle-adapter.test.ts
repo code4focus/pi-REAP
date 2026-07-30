@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createExtension } from "../../src/index.js";
 import { ExtensionHarness } from "./extension-harness.js";
 
@@ -23,6 +26,71 @@ const extension = () => ({ load: async () => config, activation });
 const route = (h: ExtensionHarness, text: string) => { h.input(text); h.before(text); return h.request({ reasoning: { effort: "baseline" } }); };
 
 describe("Pi 0.82.1 lifecycle adapter in production-safe shadow", () => {
+  it("registers a read-only profile-neutral conflict diagnostic for a valid activation", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "pi-reap-conflict-command-"));
+    try {
+      const h = new ExtensionHarness();
+      await createExtension({
+        load: async () => ({ ...config, telemetry: { enabled: true, includePromptText: false, directory } }),
+        activation,
+        telemetryDirectory: directory,
+        sessionId: "synthetic-conflict-command",
+        telemetryNonce: () => "fixed",
+      })(h.api());
+      h.start();
+      const beforeStatus = h.status.get("pi-reap");
+      const command = h.commands.get("effort-conflict");
+      expect(command?.description).toContain("activation and profile conflict");
+      expect(h.tools).toEqual([]);
+      expect(readdirSync(directory)).toEqual([]);
+      await command!.handler("private-user-content-must-not-appear", h.context);
+      expect(h.providerHookInvocations).toBe(0);
+      expect(readdirSync(directory)).toEqual([]);
+      expect(h.status.get("pi-reap")).toBe(beforeStatus);
+      const diagnostic = h.status.get("pi-reap-conflict")!;
+      expect(diagnostic).toContain("activation=prepared profile=ready source=authorized conflict=none runtime=active failClosed=false");
+      expect(diagnostic).toMatch(/capabilityDigest=[a-f0-9]{64} admissionDigest=[a-f0-9]{64} matchDigest=[a-f0-9]{64}/);
+      expect(diagnostic).toMatch(/capabilitySource=repository-pinned:[a-f0-9]{64} admissionSource=repository-pinned:[a-f0-9]{64}/);
+      expect(diagnostic).not.toContain("private-user-content");
+      expect(route(h, "Explain this file.")).toBeUndefined();
+      expect(h.status.get("pi-reap")).toContain("rung:auto → r1");
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["profile reference", { ...activation, admission: { ...profiles.admission, capabilityProfileId: "cap-conflict" } }, "profile=conflicted source=unavailable conflict=profile-reference"],
+    ["source", { ...activation, admission: { ...profiles.admission, source: { kind: "validated-catalog-candidate", authority: "candidate-only", evidenceDigest: "c".repeat(64) } } }, "profile=conflicted source=conflicted conflict=source-disagreement"],
+  ] as const)("reports a fail-closed %s conflict without provider or telemetry mutation", async (_kind, conflictedActivation, expected) => {
+    const directory = mkdtempSync(join(tmpdir(), "pi-reap-conflict-command-"));
+    try {
+      const h = new ExtensionHarness();
+      await createExtension({
+        load: async () => ({ ...config, telemetry: { enabled: true, includePromptText: false, directory } }),
+        activation: conflictedActivation,
+        telemetryDirectory: directory,
+        sessionId: "synthetic-conflicted-command",
+        telemetryNonce: () => "fixed",
+      })(h.api());
+      h.start();
+      expect(h.status.get("pi-reap")).toContain("profile:unresolved");
+      const beforeStatus = h.status.get("pi-reap");
+      await h.commands.get("effort-conflict")!.handler("ignored-private-content", h.context);
+      expect(h.providerHookInvocations).toBe(0);
+      expect(existsSync(directory) ? readdirSync(directory) : []).toEqual([]);
+      expect(h.status.get("pi-reap")).toBe(beforeStatus);
+      const diagnostic = h.status.get("pi-reap-conflict")!;
+      expect(diagnostic).toContain(expected);
+      expect(diagnostic).toContain("runtime=profile-unavailable failClosed=true");
+      expect(diagnostic).not.toContain("ignored-private-content");
+      expect(route(h, "What is JSON?")).toBeUndefined();
+      expect(h.status.get("pi-reap")).toContain("profile:unresolved");
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("decides before the first request but refuses enforcement without approved evidence", async () => {
     const h = new ExtensionHarness(); await createExtension(extension())(h.api()); h.start();
     await h.commands.get("effort")!.handler("enforce", h.context);

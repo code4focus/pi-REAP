@@ -15,7 +15,9 @@ type LifecycleHandler<E extends keyof LifecycleEvents> = (event: LifecycleEvents
 export class ExtensionHarness {
   cwd = process.cwd();
   sessionId = "synthetic";
-  readonly commands = new Map<string, { handler: (args: string, ctx: ExtensionContext) => Promise<void> }>();
+  readonly commands = new Map<string, { description?: string; handler: (args: string, ctx: ExtensionContext) => Promise<void> }>();
+  readonly tools: unknown[] = [];
+  providerHookInvocations = 0;
   readonly status = new Map<string, string | undefined>();
   readonly notifications: { message: string; type: string | undefined }[] = [];
   private readonly handlers: { [E in keyof LifecycleEvents]: LifecycleHandler<E>[] } = {
@@ -25,8 +27,9 @@ export class ExtensionHarness {
   model: { id?: string; provider?: string; api?: string; reasoning?: unknown; thinkingLevelMap?: unknown } = { id: "m", provider: "openai", api: "openai-responses", reasoning: true };
   readonly context = { model: this.model, cwd: this.cwd, sessionManager: { getSessionId: () => this.sessionId }, ui: { setStatus: (key: string, text: string | undefined) => this.status.set(key, text), notify: (message: string, type?: string) => this.notifications.push({ message, type }) } } as unknown as ExtensionContext;
   on<E extends keyof LifecycleEvents>(event: E, handler: LifecycleHandler<E>): void { this.handlers[event].push(handler); }
-  registerCommand(name: string, options: { handler: (args: string, ctx: ExtensionContext) => Promise<void> }): void { this.commands.set(name, options); }
-  emit<E extends keyof LifecycleEvents>(name: E, event: LifecycleEvents[E]): unknown { let result: unknown; for (const handler of this.handlers[name]) { const next = handler(event, this.context); if (next !== undefined) result = next; } return result; }
+  registerCommand(name: string, options: { description?: string; handler: (args: string, ctx: ExtensionContext) => Promise<void> }): void { this.commands.set(name, options); }
+  registerTool(definition: unknown): void { this.tools.push(definition); }
+  emit<E extends keyof LifecycleEvents>(name: E, event: LifecycleEvents[E]): unknown { if (name === "before_provider_request") this.providerHookInvocations += 1; let result: unknown; for (const handler of this.handlers[name]) { const next = handler(event, this.context); if (next !== undefined) result = next; } return result; }
   api(): ExtensionAPI { return this as unknown as ExtensionAPI; }
   start(reason: SessionStartEvent["reason"] = "startup"): void { (this.context as unknown as { cwd: string }).cwd = this.cwd; this.emit("session_start", { type: "session_start", reason } satisfies SessionStartEvent); }
   shutdown(reason: SessionShutdownEvent["reason"] = "new"): void { this.emit("session_shutdown", { type: "session_shutdown", reason } satisfies SessionShutdownEvent); }
